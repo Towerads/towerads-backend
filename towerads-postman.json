@@ -1,0 +1,86 @@
+{
+  "info": {
+    "_postman_id": "b6f5d9a1-9c5a-4e2b-9f63-123456789abc",
+    "name": "TowerAds Backend API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Request Ad",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/api/tower-ads/request",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "tower-ads", "request"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\\n  \\\"api_key\\\": \\\"tower_test_123\\\",\\n  \\\"placement_id\\\": \\\"main\\\",\\n  \\\"user_data\\\": {\\n    \\\"device\\\": \\\"mobile\\\",\\n    \\\"os\\\": \\\"iOS\\\"\\n  }\\n}"
+        }
+      }
+    },
+    {
+      "name": "Complete Ad",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/api/tower-ads/complete",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "tower-ads", "complete"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\\n  \\\"impression_id\\\": \\\"{{impression_id}}\\\"\\n}"
+        }
+      }
+    },
+    {
+      "name": "Click Ad",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "url": {
+          "raw": "http://localhost:3000/api/tower-ads/click",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "tower-ads", "click"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\\n  \\\"impression_id\\\": \\\"{{impression_id}}\\\"\\n}"
+        }
+      }
+    },
+    {
+      "name": "Stats",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "http://localhost:3000/api/tower-ads/stats?api_key=tower_test_123&placement_id=main",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3000",
+          "path": ["api", "tower-ads", "stats"],
+          "query": [
+            { "key": "api_key", "value": "tower_test_123" },
+            { "key": "placement_id", "value": "main" }
+          ]
+        }
+      }
+    }
+  ]
+}
