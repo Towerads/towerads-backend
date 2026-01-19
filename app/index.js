@@ -184,6 +184,55 @@ app.post("/api/tower-ads/request", async (req, res) => {
   }
 });
 
+
+// IMPRESSION (CPM начисление)
+
+app.post("/api/tower-ads/impression", async (req, res) => {
+  try {
+    const { impression_id } = req.body || {};
+    if (!impression_id)
+      return fail(res, "Missing impression_id", 400);
+
+    const r = await pool.query(
+      `
+      UPDATE impressions i
+      SET status = 'impression',
+          revenue_usd = a.bid_cpm_usd / 1000,
+          cost_usd = a.payout_cpm_usd / 1000
+      FROM ads a
+      WHERE i.id = $1
+        AND i.ad_id = a.id
+        AND i.status = 'requested'
+      RETURNING a.campaign_id,
+                a.bid_cpm_usd,
+                a.payout_cpm_usd
+      `,
+      [impression_id]
+    );
+
+    if (!r.rowCount)
+      return fail(res, "Invalid impression state", 400);
+
+    const revenue = r.rows[0].bid_cpm_usd / 1000;
+
+    await pool.query(
+      `
+      UPDATE campaigns
+      SET spent_today_usd = spent_today_usd + $1,
+          spent_total_usd = spent_total_usd + $1
+      WHERE id = $2
+      `,
+      [revenue, r.rows[0].campaign_id]     
+    );
+
+    ok(res);
+  } catch (err) {
+    console.error("❌ /impression error:", err);
+    fail(res, "Server error", 500);
+  }
+});
+
+
 app.post("/api/tower-ads/complete", async (req, res) => {
   try {
     const { impression_id } = req.body || {};
