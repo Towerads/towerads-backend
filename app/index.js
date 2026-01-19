@@ -81,7 +81,7 @@ async function getTowerPercent(placement_id) {
     WHERE placement_id = $1
       AND network = 'tower'
       AND status = 'active'
-    ORDER BY priority DESC
+    ORDER BY random()
     LIMIT 1
     `,
     [placement_id]
@@ -97,7 +97,7 @@ async function pickAd(placement_id, ad_type) {
     WHERE placement_id = $1
       AND ad_type = $2
       AND status = 'active'
-    ORDER BY priority DESC
+    ORDER BY last_shown_at NULLS FIRST
     LIMIT 1
     `,
     [placement_id, ad_type]
@@ -129,15 +129,22 @@ app.post("/api/tower-ads/request", async (req, res) => {
     const p = await requireActivePlacement(api_key, placement_id);
     if (!p.ok) return fail(res, p.error, 400);
 
-    const percent = await getTowerPercent(placement_id);
-    const roll = Math.floor(Math.random() * 100) + 1;
-
-    if (roll > percent) {
-      return fail(res);
-    }
 
     const ad = await pickAd(placement_id, p.placement.ad_type);
+
+    console.log(
+      "[pickAd result]",
+       "placement_id =", placement_id,
+       "ad_type =", p.placement.ad_type,
+       "ad =", ad
+      );
+      
     if (!ad) return fail(res);
+
+    await pool.query(
+      "UPDATE ads SET last_shown_at = now() WHERE id = $1",
+      [ad.id]
+    );
 
     const impression_id = "imp_" + uuidv4().replace(/-/g, "");
 
