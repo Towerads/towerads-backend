@@ -5,6 +5,10 @@ import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
 
 dotenv.config();
+
+const MIN_MARGIN_CPM = Number(process.env.MIN_MARGIN_CPM_USD || 0);
+console.log("MIN_MARGIN_CPM =", MIN_MARGIN_CPM);
+
 const { Pool } = pkg;
 
 // --------------------
