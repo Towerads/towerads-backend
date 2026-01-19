@@ -279,6 +279,48 @@ app.post("/api/tower-ads/click", async (req, res) => {
   }
 });
 
+
+app.get("/api/tower-ads/stats", async (req, res) => {
+  try {
+    const { placement_id } = req.query;
+
+    if (!placement_id) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing placement_id"
+      });
+    }
+
+    const r = await pool.query(`
+      SELECT
+          COUNT(*) FILTER (WHERE status = 'requested') AS requests,
+          COUNT(*) FILTER (WHERE status = 'impression') AS impressions,
+          COUNT(*) FILTER (WHERE status = 'clicked') AS clicks,
+          SUM(revenue_usd) AS revenue,
+          SUM(cost_usd) AS cost
+      FROM impressions
+      WHERE placement_id = $1
+    `, [placement_id]);
+
+    const row = r.rows[0];
+    const impressions = Number(row.impressions || 0);
+    const revenue = Number(row.revenue || 0);
+
+      res.json({
+        success: true,
+        requests: Number(row.requests),
+        impressions,
+        clicks: Number(row.clicks),
+        revenue,
+        cost: Number(row.cost),
+        ecpm: impressions ? (revenue / impressions) * 1000 : 0
+      });
+    } catch (e) {
+      console.error("❌ /stats error:", e);
+      res.status(500).json({ success: false, error: "stats error" });
+    }
+});
+
 // --------------------
 // START SERVER
 // --------------------
