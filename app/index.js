@@ -123,12 +123,22 @@ app.post("/api/tower-ads/request", async (req, res) => {
   try {
     const { api_key, placement_id, user_data } = req.body || {};
 
+
     if (!api_key || !placement_id) {
       return fail(res, "Missing api_key or placement_id", 400);
     }
 
     const k = await requireActiveApiKey(api_key);
     if (!k.ok) return fail(res, k.error, 401);
+
+
+    const provider = await decideProvider(placement_id);
+
+    if (provider !== "tower") {
+      return ok(res, {
+        provider
+      });
+    }
 
     const p = await requireActivePlacement(api_key, placement_id);
     if (!p.ok) return fail(res, p.error, 400);
@@ -169,6 +179,7 @@ app.post("/api/tower-ads/request", async (req, res) => {
     );
 
     ok(res, {
+      provider: "tower",
       ad: {
         ad_id: ad.id,
         ad_type: ad.ad_type,
@@ -320,6 +331,32 @@ app.get("/api/tower-ads/stats", async (req, res) => {
       res.status(500).json({ success: false, error: "stats error" });
     }
 });
+
+async function decideProvider(placement_id) {
+  const r = await pool.query(
+    `
+    SELECT network, traffic_percentage
+    FROM mediation_config
+    WHERE placement_id = $1
+      AND status = 'active'
+    `,
+    [placement_id]
+  );
+
+  if (!r.rowCount) return "tower";
+
+  const list = r.rows;
+  const rand = Math.random() * 100;
+
+  let acc = 0;
+  for (const row of list) {
+    acc += Number(row.traffic_percentage);
+    if (rand <= acc) {
+      return row.network;
+    }
+  }
+  return "tower";
+}
 
 // --------------------
 // START SERVER
