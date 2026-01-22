@@ -454,6 +454,36 @@ app.post("/admin/mediation/toggle", requireAdmin, async (req, res) => {
 });
 
 
+// --------------------
+// ADMIN DASHBOARD STATS
+// --------------------
+app.get("/admin/stats", requireAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'requested') AS requests,
+        COUNT(*) FILTER (WHERE status = 'impression') AS impressions,
+        COUNT(*) FILTER (WHERE status = 'clicked') AS clicks,
+        COALESCE(SUM(revenue_usd), 0) AS revenue
+      FROM impressions
+    `);
+
+    const row = r.rows[0];
+
+    res.json({
+      requests: Number(row.requests),
+      impressions: Number(row.impressions),
+      clicks: Number(row.clicks),
+      revenue: Number(row.revenue),
+    });
+  } catch (e) {
+    console.error("❌ /admin/stats error:", e);
+    res.status(500).json({ error: "stats error" });
+  }
+});
+
+
+
 app.get("/admin/stats/providers", requireAdmin, async (req, res) => {
   const period = req.query.period || "today";
 
