@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { requireAdmin } from "./middlewares/adminAuth.js";
 
 
 dotenv.config();
@@ -25,7 +26,8 @@ app.use(
   cors({
     origin: "*",
     methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+
   })
 );
 
@@ -406,6 +408,65 @@ async function decideProvider(placement_id) {
 
   return "tower";
 }
+
+app.get("/admin/mediation", requireAdmin, async (req, res) => {
+  const r = await pool.query(`
+    SELECT
+      placement_id,
+      network AS provider,
+      status,
+      traffic_percentage
+    FROM mediation_config
+    ORDER BY network
+  `);
+
+  res.json({ providers: r.rows });
+});
+
+
+app.post("/admin/mediation/toggle", requireAdmin, async (req, res) => {
+  const { provider, status } = req.body;
+
+  if (!provider || !status) {
+    return res.status(400).json({ error: "Missing fields" });
+  }
+
+  await pool.query(
+    `
+    UPDATE mediation_config
+    SET status = $1
+    WHERE network = $2
+    `,
+    [status, provider]
+  );
+
+  res.json({ success: true });
+});
+
+
+app.get("/admin/stats/providers", requireAdmin, async (req, res) => {
+  const period = req.query.period || "today";
+
+  let interval = "1 day";
+  if (period === "7d") interval = "7 days";
+  if (period === "30d") interval = "30 days";
+
+  const r = await pool.query(`
+    SELECT
+      m.network AS provider,
+      COUNT(i.id) AS impressions,
+      COALESCE(SUM(i.revenue_usd), 0) AS revenue
+    FROM impressions i
+    JOIN ads a ON a.id = i.ad_id
+    JOIN mediation_config m ON m.placement_id = i.placement_id
+    WHERE i.created_at >= now() - interval '${interval}'
+    GROUP BY m.network
+  `);
+
+  res.json({ stats: r.rows });
+});
+
+
 
 // --------------------
 // START SERVER
