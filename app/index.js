@@ -435,9 +435,9 @@ app.get("/admin/mediation", requireAdmin, async (req, res) => {
 
 
 app.post("/admin/mediation/toggle", requireAdmin, async (req, res) => {
-  const { provider, status } = req.body;
+  const { placement_id, provider, status } = req.body;
 
-  if (!provider || !status) {
+  if (!placement_id || !provider || !status) {
     return res.status(400).json({ error: "Missing fields" });
   }
 
@@ -445,9 +445,33 @@ app.post("/admin/mediation/toggle", requireAdmin, async (req, res) => {
     `
     UPDATE mediation_config
     SET status = $1
-    WHERE network = $2
+    WHERE placement_id = $2 AND network = $3
     `,
-    [status, provider]
+    [status, placement_id, provider]
+  );
+
+  res.json({ success: true });
+});
+
+app.post("/admin/mediation/traffic", requireAdmin, async (req, res) => {
+  const { placement_id, provider, traffic_percentage } = req.body;
+
+  if (!placement_id || !provider || traffic_percentage === undefined) {
+    return res.status(400).json({ error: "Missing fields" });
+  }
+
+  const pct = Number(traffic_percentage);
+  if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+    return res.status(400).json({ error: "traffic_percentage must be 0..100" });
+  }
+
+  await pool.query(
+    `
+    UPDATE mediation_config
+    SET traffic_percentage = $1
+    WHERE placement_id = $2 AND network = $3
+    `,
+    [pct, placement_id, provider]
   );
 
   res.json({ success: true });
