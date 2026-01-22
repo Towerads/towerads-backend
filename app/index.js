@@ -6,6 +6,9 @@ import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { requireAdmin } from "./middlewares/adminAuth.js";
+import cookieParser from "cookie-parser";
+
+
 
 
 dotenv.config();
@@ -21,6 +24,7 @@ const { Pool } = pkg;
 const app = express();
 
 app.use(express.json());
+app.use(cookieParser());
 
 app.use(
   cors({
@@ -163,7 +167,13 @@ app.post("/admin/auth/login", async (req, res) => {
       [admin.id]
     );
 
-    res.json({ token });
+    res.cookie("admin_token", token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+    res.json({ success: true });
   } catch (err) {
     console.error("❌ admin login error:", err);
     res.status(500).json({ error: "Server error" });
