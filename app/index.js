@@ -15,6 +15,7 @@ const { Pool } = pkg;
 // APP
 // --------------------
 const app = express();
+
 app.use(express.json());
 
 app.use(
@@ -59,38 +60,31 @@ async function requireActiveApiKey(api_key) {
     "SELECT status FROM api_keys WHERE api_key = $1",
     [api_key]
   );
+
   if (r.rowCount === 0) return { ok: false, error: "Invalid api_key" };
   if (r.rows[0].status !== "active")
     return { ok: false, error: "api_key inactive" };
+
   return { ok: true };
 }
 
 async function requireActivePlacement(api_key, placement_id) {
   const r = await pool.query(
-    "SELECT id, ad_type, status FROM placements WHERE api_key = $1 AND id = $2",
+    `
+    SELECT id, ad_type, status
+    FROM placements
+    WHERE api_key = $1 AND id = $2
+    `,
     [api_key, placement_id]
   );
+
   if (r.rowCount === 0)
     return { ok: false, error: "Invalid placement_id" };
+
   if (r.rows[0].status !== "active")
     return { ok: false, error: "placement paused" };
-  return { ok: true, placement: r.rows[0] };
-}
 
-async function getTowerPercent(placement_id) {
-  const r = await pool.query(
-    `
-    SELECT traffic_percentage
-    FROM mediation_config
-    WHERE placement_id = $1
-      AND network = 'tower'
-      AND status = 'active'
-    ORDER BY random()
-    LIMIT 1
-    `,
-    [placement_id]
-  );
-  return r.rowCount ? Number(r.rows[0].traffic_percentage) : 0;
+  return { ok: true, placement: r.rows[0] };
 }
 
 async function pickAd(placement_id, ad_type) {
@@ -106,11 +100,12 @@ async function pickAd(placement_id, ad_type) {
     `,
     [placement_id, ad_type]
   );
+
   return r.rowCount ? r.rows[0] : null;
 }
 
 // --------------------
-// HEALTH CHECK (Render)
+// HEALTH CHECK
 // --------------------
 app.get("/healthz", (req, res) => {
   res.status(200).json({ ok: true });
@@ -123,7 +118,6 @@ app.post("/api/tower-ads/request", async (req, res) => {
   try {
     const { api_key, placement_id, user_data } = req.body || {};
 
-
     if (!api_key || !placement_id) {
       return fail(res, "Missing api_key or placement_id", 400);
     }
@@ -131,28 +125,16 @@ app.post("/api/tower-ads/request", async (req, res) => {
     const k = await requireActiveApiKey(api_key);
     if (!k.ok) return fail(res, k.error, 401);
 
-
     const provider = await decideProvider(placement_id);
-
     if (provider !== "tower") {
-      return ok(res, {
-        provider
-      });
+      return ok(res, { provider });
     }
 
     const p = await requireActivePlacement(api_key, placement_id);
     if (!p.ok) return fail(res, p.error, 400);
 
-
     const ad = await pickAd(placement_id, p.placement.ad_type);
 
-    console.log(
-      "[pickAd result]",
-       "placement_id =", placement_id,
-       "ad_type =", p.placement.ad_type,
-       "ad =", ad
-      );
-      
     if (!ad) return fail(res);
 
     await pool.query(
@@ -195,9 +177,9 @@ app.post("/api/tower-ads/request", async (req, res) => {
   }
 });
 
-
-// IMPRESSION (CPM начисление)
-
+// --------------------
+// IMPRESSION
+// --------------------
 app.post("/api/tower-ads/impression", async (req, res) => {
   try {
     const { impression_id } = req.body || {};
@@ -214,9 +196,7 @@ app.post("/api/tower-ads/impression", async (req, res) => {
       WHERE i.id = $1
         AND i.ad_id = a.id
         AND i.status = 'requested'
-      RETURNING a.campaign_id,
-                a.bid_cpm_usd,
-                a.payout_cpm_usd
+      RETURNING a.campaign_id, a.bid_cpm_usd
       `,
       [impression_id]
     );
@@ -233,7 +213,7 @@ app.post("/api/tower-ads/impression", async (req, res) => {
           spent_total_usd = spent_total_usd + $1
       WHERE id = $2
       `,
-      [revenue, r.rows[0].campaign_id]     
+      [revenue, r.rows[0].campaign_id]
     );
 
     ok(res);
@@ -243,7 +223,9 @@ app.post("/api/tower-ads/impression", async (req, res) => {
   }
 });
 
-
+// --------------------
+// COMPLETE
+// --------------------
 app.post("/api/tower-ads/complete", async (req, res) => {
   try {
     const { impression_id } = req.body || {};
@@ -267,6 +249,9 @@ app.post("/api/tower-ads/complete", async (req, res) => {
   }
 });
 
+// --------------------
+// CLICK
+// --------------------
 app.post("/api/tower-ads/click", async (req, res) => {
   try {
     const { impression_id } = req.body || {};
@@ -290,7 +275,9 @@ app.post("/api/tower-ads/click", async (req, res) => {
   }
 });
 
-
+// --------------------
+// STATS
+// --------------------
 app.get("/api/tower-ads/stats", async (req, res) => {
   try {
     const { placement_id } = req.query;
@@ -298,40 +285,46 @@ app.get("/api/tower-ads/stats", async (req, res) => {
     if (!placement_id) {
       return res.status(400).json({
         success: false,
-        error: "Missing placement_id"
+        error: "Missing placement_id",
       });
     }
 
-    const r = await pool.query(`
+    const r = await pool.query(
+      `
       SELECT
-          COUNT(*) FILTER (WHERE status = 'requested') AS requests,
-          COUNT(*) FILTER (WHERE status = 'impression') AS impressions,
-          COUNT(*) FILTER (WHERE status = 'clicked') AS clicks,
-          SUM(revenue_usd) AS revenue,
-          SUM(cost_usd) AS cost
+        COUNT(*) FILTER (WHERE status = 'requested') AS requests,
+        COUNT(*) FILTER (WHERE status = 'impression') AS impressions,
+        COUNT(*) FILTER (WHERE status = 'clicked') AS clicks,
+        SUM(revenue_usd) AS revenue,
+        SUM(cost_usd) AS cost
       FROM impressions
       WHERE placement_id = $1
-    `, [placement_id]);
+      `,
+      [placement_id]
+    );
 
     const row = r.rows[0];
     const impressions = Number(row.impressions || 0);
     const revenue = Number(row.revenue || 0);
 
-      res.json({
-        success: true,
-        requests: Number(row.requests),
-        impressions,
-        clicks: Number(row.clicks),
-        revenue,
-        cost: Number(row.cost),
-        ecpm: impressions ? (revenue / impressions) * 1000 : 0
-      });
-    } catch (e) {
-      console.error("❌ /stats error:", e);
-      res.status(500).json({ success: false, error: "stats error" });
-    }
+    res.json({
+      success: true,
+      requests: Number(row.requests),
+      impressions,
+      clicks: Number(row.clicks),
+      revenue,
+      cost: Number(row.cost),
+      ecpm: impressions ? (revenue / impressions) * 1000 : 0,
+    });
+  } catch (e) {
+    console.error("❌ /stats error:", e);
+    res.status(500).json({ success: false, error: "stats error" });
+  }
 });
 
+// --------------------
+// MEDIATION
+// --------------------
 async function decideProvider(placement_id) {
   const r = await pool.query(
     `
@@ -345,16 +338,14 @@ async function decideProvider(placement_id) {
 
   if (!r.rowCount) return "tower";
 
-  const list = r.rows;
   const rand = Math.random() * 100;
-
   let acc = 0;
-  for (const row of list) {
+
+  for (const row of r.rows) {
     acc += Number(row.traffic_percentage);
-    if (rand <= acc) {
-      return row.network;
-    }
+    if (rand <= acc) return row.network;
   }
+
   return "tower";
 }
 
@@ -362,6 +353,9 @@ async function decideProvider(placement_id) {
 // START SERVER
 // --------------------
 const PORT = Number(process.env.PORT || 3000);
+
 app.listen(PORT, () => {
   console.log(`🚀 TowerAds API running on port ${PORT}`);
 });
+
+
