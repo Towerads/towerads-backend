@@ -171,18 +171,16 @@ app.post("/admin/auth/login", async (req, res) => {
       [admin.id]
     );
 
-    res.cookie("admin_token", token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: "none",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+    res.json({
+      success: true,
+      token,
     });
-    res.json({ success: true });
   } catch (err) {
     console.error("❌ admin login error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
+
 
 
 // --------------------
