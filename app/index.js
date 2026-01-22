@@ -3,6 +3,9 @@ import cors from "cors";
 import pkg from "pg";
 import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
 
 dotenv.config();
 
@@ -110,6 +113,61 @@ async function pickAd(placement_id, ad_type) {
 app.get("/healthz", (req, res) => {
   res.status(200).json({ ok: true });
 });
+
+// ADMIN AUTH
+
+app.post("/admin/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body || {};
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Missing email or password" });
+    }
+
+    const r = await pool.query(
+      `
+      SELECT id, email, password_hash, role, status
+      FROM admin_users
+      WHERE email = $1
+      `,
+      [email]
+    );
+
+    if (!r.rowCount) {
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+
+    const admin = r.rows[0];
+    if (admin.status !== "active") {
+      return res.status(403).json({ error: "Admin disabled" });
+    }
+
+    const ok = await bcrypt.compare(password, admin.password_hash);
+    if (!ok) {
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+
+    const token = jwt.sign(
+      {
+        id: admin.id,
+        role: admin.role,
+      },
+      process.env.ADMIN_JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    await pool.query(
+      "UPDATE admin_users SET last_login_at = now() WHERE id = $1",
+      [admin.id]
+    );
+
+    res.json({ token });
+  } catch (err) {
+    console.error("❌ admin login error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 // --------------------
 // API ENDPOINTS
