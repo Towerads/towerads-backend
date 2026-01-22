@@ -28,12 +28,16 @@ app.use(cookieParser());
 
 app.use(
   cors({
-    origin: "*",
+    origin: [
+      "http://localhost:3000",
+      "https://towerads-admin-web.onrender.com" // если будет
+    ],
+    credentials: true,
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-
   })
 );
+
 
 // --------------------
 // DATABASE (Render-ready)
