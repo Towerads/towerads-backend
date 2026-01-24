@@ -342,6 +342,17 @@ app.post("/api/tower-ads/impression", async (req, res) => {
         await pool.query(`UPDATE creatives SET status = 'frozen' WHERE id = $1`, [
           left.rows[0].creative_id,
         ]);
+
+        // ✅ ADD: паузим USL ads, чтобы больше не выбирались
+        await pool.query(
+          `
+          UPDATE ads
+          SET status = 'paused'
+          WHERE source = 'usl'
+            AND creative_id = $1
+          `,
+          [left.rows[0].creative_id]
+        );
       }
 
       return ok(res);
