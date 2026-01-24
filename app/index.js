@@ -144,6 +144,34 @@ async function pickAd(placement_id, ad_type) {
   return ext.rowCount ? { ...ext.rows[0], source: "external" } : null;
 }
 
+
+async function getOrCreateAdvertiserByTelegram(tgUserId) {
+  const r = await pool.query(
+    `
+    SELECT id
+    FROM advertisers
+    WHERE telegram_user_id = $1
+    `,
+    [tgUserId]
+  );
+
+  if (r.rowCount) {
+    return r.rows[0].id;
+  }
+
+  const created = await pool.query(
+    `
+    INSERT INTO advertisers (telegram_user_id, status)
+    VALUES ($1, 'active')
+    RETURNING id
+    `,
+    [tgUserId]
+  );
+
+  return created.rows[0].id;
+}
+
+
 // --------------------
 // HEALTH CHECK
 // --------------------
@@ -205,6 +233,207 @@ app.post("/admin/auth/login", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
+
+// ====================
+// ADVERTISER API (Telegram Mini App)
+// ====================
+
+// 1️⃣ Создать креатив (draft)
+app.post("/advertiser/creatives", async (req, res) => {
+  try {
+    const tgUserId = req.headers["x-tg-user-id"];
+    if (!tgUserId) {
+      return res.status(401).json({ error: "Missing X-TG-USER-ID" });
+    }
+
+    const { type, media_url, click_url, duration } = req.body || {};
+    if (!type || !media_url || !click_url) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    const advertiserId = await getOrCreateAdvertiserByTelegram(tgUserId);
+
+    const r = await pool.query(
+      `
+      INSERT INTO creatives
+      (advertiser_id, type, media_url, click_url, duration, status)
+      VALUES ($1, $2, $3, $4, $5, 'draft')
+      RETURNING id, status, created_at
+      `,
+      [advertiserId, type, media_url, click_url, duration || null]
+    );
+
+    res.json({ success: true, creative: r.rows[0] });
+  } catch (err) {
+    console.error("❌ create creative error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+// 2️⃣ Получить список своих креативов
+app.get("/advertiser/creatives", async (req, res) => {
+  try {
+    const tgUserId = req.headers["x-tg-user-id"];
+    if (!tgUserId) {
+      return res.status(401).json({ error: "Missing X-TG-USER-ID" });
+    }
+
+    const advertiserId = await getOrCreateAdvertiserByTelegram(tgUserId);
+
+    const r = await pool.query(
+      `
+      SELECT
+        id,
+        type,
+        media_url,
+        click_url,
+        duration,
+        status,
+        created_at
+      FROM creatives
+      WHERE advertiser_id = $1
+      ORDER BY created_at DESC
+      `,
+      [advertiserId]
+    );
+
+    res.json({ success: true, creatives: r.rows });
+  } catch (err) {
+    console.error("❌ list creatives error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+// 3️⃣ Отправить креатив на модерацию
+app.post("/advertiser/creatives/:id/submit", async (req, res) => {
+  try {
+    const tgUserId = req.headers["x-tg-user-id"];
+    if (!tgUserId) {
+      return res.status(401).json({ error: "Missing X-TG-USER-ID" });
+    }
+
+    const advertiserId = await getOrCreateAdvertiserByTelegram(tgUserId);
+    const creativeId = req.params.id;
+
+    const r = await pool.query(
+      `
+      UPDATE creatives
+      SET status = 'pending',
+          updated_at = now()
+      WHERE id = $1
+        AND advertiser_id = $2
+        AND status = 'draft'
+      RETURNING id
+      `,
+      [creativeId, advertiserId]
+    );
+
+    if (!r.rowCount) {
+      return res
+        .status(400)
+        .json({ error: "Creative not found or invalid status" });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ submit creative error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+// --------------------
+// ADMIN: CREATIVES MODERATION
+// --------------------
+app.get("/admin/creatives/pending", requireAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT
+        c.id,
+        c.type,
+        c.media_url,
+        c.click_url,
+        c.duration,
+        c.created_at,
+        a.email AS advertiser_email
+      FROM creatives c
+      JOIN advertisers a ON a.id = c.advertiser_id
+      WHERE c.status = 'pending'
+      ORDER BY c.created_at ASC
+    `);
+
+    res.json({ creatives: r.rows });
+  } catch (err) {
+    console.error("❌ pending creatives error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+app.post("/admin/creatives/approve", requireAdmin, async (req, res) => {
+  const { creative_id } = req.body || {};
+
+  if (!creative_id) {
+    return res.status(400).json({ error: "Missing creative_id" });
+  }
+
+  const r = await pool.query(
+    `
+    UPDATE creatives
+    SET status = 'approved',
+        reject_reason = NULL,
+        updated_at = now()
+    WHERE id = $1
+      AND status = 'pending'
+    RETURNING id
+    `,
+    [creative_id]
+  );
+
+  if (!r.rowCount) {
+    return res
+      .status(400)
+      .json({ error: "Creative not in pending state" });
+  }
+
+  res.json({ success: true });
+});
+
+
+app.post("/admin/creatives/reject", requireAdmin, async (req, res) => {
+  const { creative_id, reason } = req.body || {};
+
+  if (!creative_id || !reason) {
+    return res
+      .status(400)
+      .json({ error: "Missing creative_id or reason" });
+  }
+
+  const r = await pool.query(
+    `
+    UPDATE creatives
+    SET status = 'rejected',
+        reject_reason = $2,
+        updated_at = now()
+    WHERE id = $1
+      AND status = 'pending'
+    RETURNING id
+    `,
+    [creative_id, reason]
+  );
+
+  if (!r.rowCount) {
+    return res
+      .status(400)
+      .json({ error: "Creative not in pending state" });
+  }
+
+  res.json({ success: true });
+});
+
 
 // --------------------
 // API ENDPOINTS
@@ -272,6 +501,10 @@ app.post("/api/tower-ads/request", async (req, res) => {
     fail(res, "Server error", 500);
   }
 });
+
+
+
+
 
 // --------------------
 // IMPRESSION
