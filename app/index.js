@@ -367,20 +367,51 @@ app.get("/admin/pricing-plans", requireAdmin, async (req, res) => {
   }
 });
 
-
-
 // --------------------
 // ADMIN: CREATE CREATIVE ORDER (START ADS)
 // --------------------
 app.post("/admin/creative-orders/create", requireAdmin, async (req, res) => {
   try {
-    const { creative_id, impressions_total, price_usd } = req.body || {};
+    const {
+      creative_id,
+      pricing_plan_id,
+      impressions_total,
+      price_usd,
+    } = req.body || {};
 
-    if (!creative_id || !impressions_total || !price_usd) {
+    // --------------------
+    // RESOLVE PRICING
+    // --------------------
+    let impressions = impressions_total;
+    let price = price_usd;
+
+    // если выбран тариф — берём данные из pricing_plans
+    if (pricing_plan_id) {
+      const plan = await pool.query(
+        `
+        SELECT impressions, price_usd
+        FROM pricing_plans
+        WHERE id = $1::uuid
+        `,
+        [pricing_plan_id]
+      );
+
+      if (!plan.rowCount) {
+        return res.status(400).json({ error: "Invalid pricing plan" });
+      }
+
+      impressions = plan.rows[0].impressions;
+      price = plan.rows[0].price_usd;
+    }
+
+    // финальная проверка
+    if (!creative_id || !impressions || !price) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
-    // проверяем, что креатив approved
+    // --------------------
+    // CHECK CREATIVE STATUS
+    // --------------------
     const cr = await pool.query(
       `
       SELECT id
@@ -395,9 +426,11 @@ app.post("/admin/creative-orders/create", requireAdmin, async (req, res) => {
       return res.status(400).json({ error: "Creative not approved" });
     }
 
-    const pricePerImpression = price_usd / impressions_total;
+    // --------------------
+    // CREATE ORDER
+    // --------------------
+    const pricePerImpression = price / impressions;
 
-    // создаём заказ
     const order = await pool.query(
       `
       INSERT INTO creative_orders (
@@ -411,10 +444,12 @@ app.post("/admin/creative-orders/create", requireAdmin, async (req, res) => {
       VALUES ($1::uuid, $2, $2, $3, $4, 'active')
       RETURNING id
       `,
-      [creative_id, impressions_total, price_usd, pricePerImpression]
+      [creative_id, impressions, price, pricePerImpression]
     );
 
-    // создаём ad, чтобы реклама начала крутиться
+    // --------------------
+    // CREATE ADS (START ROTATION)
+    // --------------------
     await pool.query(
       `
       INSERT INTO ads (
@@ -455,6 +490,7 @@ app.post("/admin/creative-orders/create", requireAdmin, async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
 
 // --------------------
 // ADVERTISER (TG MINI APP)
