@@ -81,7 +81,7 @@ async function requireActivePlacement(api_key, placement_id) {
     `
     SELECT id, ad_type, status
     FROM placements
-    WHERE api_key = $1 AND id = $2::uuid
+    WHERE api_key = $1 AND id = $2
     `,
     [api_key, placement_id]
   );
@@ -109,7 +109,7 @@ async function pickAd(placement_id, ad_type) {
     FROM ads a
     JOIN creatives c ON c.id = a.creative_id
     JOIN creative_orders co ON co.creative_id = c.id
-    WHERE a.placement_id = $1::uuid
+    WHERE a.placement_id = $1
       AND a.ad_type = $2
       AND a.status = 'active'
       AND a.source = 'usl'
@@ -131,7 +131,7 @@ async function pickAd(placement_id, ad_type) {
     `
     SELECT id, ad_type, media_url, click_url, duration
     FROM ads
-    WHERE placement_id = $1::uuid
+    WHERE placement_id = $1
       AND ad_type = $2
       AND status = 'active'
       AND source = 'external'
@@ -221,10 +221,9 @@ app.post("/admin/auth/login", async (req, res) => {
       { expiresIn: "7d" }
     );
 
-    await pool.query(
-      "UPDATE admin_users SET last_login_at = now() WHERE id = $1::uuid",
-      [admin.id]
-    );
+    await pool.query("UPDATE admin_users SET last_login_at = now() WHERE id = $1", [
+      admin.id,
+    ]);
 
     res.json({
       success: true,
@@ -546,7 +545,7 @@ app.post("/api/tower-ads/request", async (req, res) => {
       `
       INSERT INTO impressions
       (id, ad_id, placement_id, user_ip, device, os, status, source, creative_id, order_id)
-      VALUES ($1, $2, $3::uuid, $4, $5, $6, 'requested', $7, $8::uuid, $9::uuid)
+      VALUES ($1, $2, $3, $4, $5, $6, 'requested', $7, $8::uuid, $9::uuid)
       `,
       [
         impression_id,
@@ -776,7 +775,7 @@ app.get("/api/tower-ads/stats", async (req, res) => {
         SUM(revenue_usd) AS revenue,
         SUM(cost_usd) AS cost
       FROM impressions
-      WHERE placement_id = $1::uuid
+      WHERE placement_id = $1
       `,
       [placement_id]
     );
@@ -808,7 +807,7 @@ async function decideProvider(placement_id) {
     `
     SELECT network, traffic_percentage
     FROM mediation_config
-    WHERE placement_id = $1::uuid
+    WHERE placement_id = $1
       AND status = 'active'
     `,
     [placement_id]
@@ -852,7 +851,7 @@ app.post("/admin/mediation/toggle", requireAdmin, async (req, res) => {
     `
     UPDATE mediation_config
     SET status = $1
-    WHERE placement_id = $2::uuid AND network = $3
+    WHERE placement_id = $2 AND network = $3
     `,
     [status, placement_id, provider]
   );
@@ -876,7 +875,7 @@ app.post("/admin/mediation/traffic", requireAdmin, async (req, res) => {
     `
     UPDATE mediation_config
     SET traffic_percentage = $1
-    WHERE placement_id = $2::uuid AND network = $3
+    WHERE placement_id = $2 AND network = $3
     `,
     [pct, placement_id, provider]
   );
