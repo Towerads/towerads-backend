@@ -333,9 +333,18 @@ app.get("/admin/creatives", requireAdmin, async (req, res) => {
         c.duration,
         c.status,
         c.created_at,
-        a.email AS advertiser_email
+
+        a.email AS advertiser_email,
+
+        p.id          AS pricing_plan_id,
+        p.name        AS pricing_name,
+        p.impressions AS impressions,
+        p.price_usd   AS price_usd
+
       FROM creatives c
       JOIN advertisers a ON a.id = c.advertiser_id
+      LEFT JOIN pricing_plans p ON p.id = c.pricing_plan_id
+
       WHERE ($1::text IS NULL OR c.status = $1)
       ORDER BY c.created_at DESC
       `,
@@ -348,6 +357,7 @@ app.get("/admin/creatives", requireAdmin, async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
 
 // --------------------
 // ADMIN: PRICING PLANS
