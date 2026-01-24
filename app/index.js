@@ -8,9 +8,6 @@ import jwt from "jsonwebtoken";
 import { requireAdmin } from "./middlewares/adminAuth.js";
 import cookieParser from "cookie-parser";
 
-
-
-
 dotenv.config();
 
 const MIN_MARGIN_CPM = Number(process.env.MIN_MARGIN_CPM_USD || 0);
@@ -30,14 +27,13 @@ app.use(
   cors({
     origin: [
       "http://localhost:3000",
-      "https://towerads-admin-web.onrender.com" // если будет
+      "https://towerads-admin-web.onrender.com", // если будет
     ],
     credentials: true,
     methods: ["GET", "POST", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
-
 
 // --------------------
 // DATABASE (Render-ready)
@@ -69,10 +65,9 @@ function fail(res, error = "No ad available", code = 200) {
 }
 
 async function requireActiveApiKey(api_key) {
-  const r = await pool.query(
-    "SELECT status FROM api_keys WHERE api_key = $1",
-    [api_key]
-  );
+  const r = await pool.query("SELECT status FROM api_keys WHERE api_key = $1", [
+    api_key,
+  ]);
 
   if (r.rowCount === 0) return { ok: false, error: "Invalid api_key" };
   if (r.rows[0].status !== "active")
@@ -91,8 +86,7 @@ async function requireActivePlacement(api_key, placement_id) {
     [api_key, placement_id]
   );
 
-  if (r.rowCount === 0)
-    return { ok: false, error: "Invalid placement_id" };
+  if (r.rowCount === 0) return { ok: false, error: "Invalid placement_id" };
 
   if (r.rows[0].status !== "active")
     return { ok: false, error: "placement paused" };
@@ -101,20 +95,53 @@ async function requireActivePlacement(api_key, placement_id) {
 }
 
 async function pickAd(placement_id, ad_type) {
-  const r = await pool.query(
+  // 1) Сначала пробуем USL
+  const usl = await pool.query(
+    `
+    SELECT
+      a.id,
+      a.ad_type,
+      c.media_url,
+      c.click_url,
+      c.duration,
+      c.id AS creative_id,
+      co.id AS order_id
+    FROM ads a
+    JOIN creatives c ON c.id = a.creative_id
+    JOIN creative_orders co ON co.creative_id = c.id
+    WHERE a.placement_id = $1
+      AND a.ad_type = $2
+      AND a.status = 'active'
+      AND a.source = 'usl'
+      AND c.status = 'approved'
+      AND co.status = 'active'
+      AND co.impressions_left > 0
+    ORDER BY a.last_shown_at NULLS FIRST
+    LIMIT 1
+    `,
+    [placement_id, ad_type]
+  );
+
+  if (usl.rowCount) {
+    return { ...usl.rows[0], source: "usl" };
+  }
+
+  // 2) Fallback на external (как было, но с фильтром source)
+  const ext = await pool.query(
     `
     SELECT id, ad_type, media_url, click_url, duration
     FROM ads
     WHERE placement_id = $1
       AND ad_type = $2
       AND status = 'active'
+      AND source = 'external'
     ORDER BY last_shown_at NULLS FIRST
     LIMIT 1
     `,
     [placement_id, ad_type]
   );
 
-  return r.rowCount ? r.rows[0] : null;
+  return ext.rowCount ? { ...ext.rows[0], source: "external" } : null;
 }
 
 // --------------------
@@ -125,7 +152,6 @@ app.get("/healthz", (req, res) => {
 });
 
 // ADMIN AUTH
-
 app.post("/admin/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -152,8 +178,8 @@ app.post("/admin/auth/login", async (req, res) => {
       return res.status(403).json({ error: "Admin disabled" });
     }
 
-    const ok = await bcrypt.compare(password, admin.password_hash);
-    if (!ok) {
+    const okPass = await bcrypt.compare(password, admin.password_hash);
+    if (!okPass) {
       return res.status(401).json({ error: "Invalid email or password" });
     }
 
@@ -166,10 +192,9 @@ app.post("/admin/auth/login", async (req, res) => {
       { expiresIn: "7d" }
     );
 
-    await pool.query(
-      "UPDATE admin_users SET last_login_at = now() WHERE id = $1",
-      [admin.id]
-    );
+    await pool.query("UPDATE admin_users SET last_login_at = now() WHERE id = $1", [
+      admin.id,
+    ]);
 
     res.json({
       success: true,
@@ -180,8 +205,6 @@ app.post("/admin/auth/login", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
-
-
 
 // --------------------
 // API ENDPOINTS
@@ -209,18 +232,16 @@ app.post("/api/tower-ads/request", async (req, res) => {
 
     if (!ad) return fail(res);
 
-    await pool.query(
-      "UPDATE ads SET last_shown_at = now() WHERE id = $1",
-      [ad.id]
-    );
+    await pool.query("UPDATE ads SET last_shown_at = now() WHERE id = $1", [ad.id]);
 
     const impression_id = "imp_" + uuidv4().replace(/-/g, "");
 
+    // ✅ FIX: только скобки/аргументы (логика та же)
     await pool.query(
       `
       INSERT INTO impressions
-      (id, ad_id, placement_id, user_ip, device, os, status)
-      VALUES ($1, $2, $3, $4, $5, $6, 'requested')
+      (id, ad_id, placement_id, user_ip, device, os, status, source, creative_id, order_id)
+      VALUES ($1, $2, $3, $4, $5, $6, 'requested', $7, $8, $9)
       `,
       [
         impression_id,
@@ -229,6 +250,9 @@ app.post("/api/tower-ads/request", async (req, res) => {
         user_data?.ip || null,
         user_data?.device || null,
         user_data?.os || null,
+        ad.source || "external",
+        ad.creative_id || null,
+        ad.order_id || null,
       ]
     );
 
@@ -255,38 +279,107 @@ app.post("/api/tower-ads/request", async (req, res) => {
 app.post("/api/tower-ads/impression", async (req, res) => {
   try {
     const { impression_id } = req.body || {};
-    if (!impression_id)
-      return fail(res, "Missing impression_id", 400);
+    if (!impression_id) return fail(res, "Missing impression_id", 400);
 
-    const r = await pool.query(
+    // ✅ FIX: добавили USL-ветку, external оставили как было по смыслу
+    const meta = await pool.query(
       `
-      UPDATE impressions i
-      SET status = 'impression',
-          revenue_usd = a.bid_cpm_usd / 1000,
-          cost_usd = a.payout_cpm_usd / 1000
-      FROM ads a
+      SELECT
+        i.source,
+        i.order_id,
+        co.price_per_impression,
+        a.campaign_id,
+        a.bid_cpm_usd,
+        a.payout_cpm_usd
+      FROM impressions i
+      LEFT JOIN creative_orders co ON co.id = i.order_id
+      LEFT JOIN ads a ON a.id = i.ad_id
       WHERE i.id = $1
-        AND i.ad_id = a.id
         AND i.status = 'requested'
-      RETURNING a.campaign_id, a.bid_cpm_usd
       `,
       [impression_id]
     );
 
-    if (!r.rowCount)
-      return fail(res, "Invalid impression state", 400);
+    if (!meta.rowCount) return fail(res, "Invalid impression state", 400);
 
-    const revenue = r.rows[0].bid_cpm_usd / 1000;
+    if (meta.rows[0].source === "usl") {
+      const orderId = meta.rows[0].order_id;
+      const pricePerImp = Number(meta.rows[0].price_per_impression || 0);
 
-    await pool.query(
+      if (!orderId) return fail(res, "Missing order_id for usl", 400);
+
+      await pool.query(
+        `
+        UPDATE impressions
+        SET status = 'impression',
+            revenue_usd = $1,
+            cost_usd = 0
+        WHERE id = $2
+          AND status = 'requested'
+        `,
+        [pricePerImp, impression_id]
+      );
+
+      const left = await pool.query(
+        `
+        UPDATE creative_orders
+        SET impressions_left = impressions_left - 1
+        WHERE id = $1
+          AND status = 'active'
+          AND impressions_left > 0
+        RETURNING impressions_left, creative_id
+        `,
+        [orderId]
+      );
+
+      if (!left.rowCount)
+        return fail(res, "Order not active or no impressions left", 400);
+
+      if (left.rows[0].impressions_left <= 0) {
+        await pool.query(`UPDATE creative_orders SET status = 'completed' WHERE id = $1`, [
+          orderId,
+        ]);
+        await pool.query(`UPDATE creatives SET status = 'frozen' WHERE id = $1`, [
+          left.rows[0].creative_id,
+        ]);
+      }
+
+      return ok(res);
+    }
+
+    // external (как было)
+    const bid = Number(meta.rows[0].bid_cpm_usd || 0);
+    const payout = Number(meta.rows[0].payout_cpm_usd || 0);
+    const revenue = bid / 1000;
+    const cost = payout / 1000;
+
+    const upd = await pool.query(
       `
-      UPDATE campaigns
-      SET spent_today_usd = spent_today_usd + $1,
-          spent_total_usd = spent_total_usd + $1
-      WHERE id = $2
+      UPDATE impressions
+      SET status = 'impression',
+          revenue_usd = $1,
+          cost_usd = $2
+      WHERE id = $3
+        AND status = 'requested'
+      RETURNING campaign_id
       `,
-      [revenue, r.rows[0].campaign_id]
+      [revenue, cost, impression_id]
     );
+
+    if (!upd.rowCount) return fail(res, "Invalid impression state", 400);
+
+    const campaignId = meta.rows[0].campaign_id;
+    if (campaignId) {
+      await pool.query(
+        `
+        UPDATE campaigns
+        SET spent_today_usd = spent_today_usd + $1,
+            spent_total_usd = spent_total_usd + $1
+        WHERE id = $2
+        `,
+        [revenue, campaignId]
+      );
+    }
 
     ok(res);
   } catch (err) {
@@ -301,8 +394,7 @@ app.post("/api/tower-ads/impression", async (req, res) => {
 app.post("/api/tower-ads/complete", async (req, res) => {
   try {
     const { impression_id } = req.body || {};
-    if (!impression_id)
-      return fail(res, "Missing impression_id", 400);
+    if (!impression_id) return fail(res, "Missing impression_id", 400);
 
     await pool.query(
       `
@@ -327,8 +419,7 @@ app.post("/api/tower-ads/complete", async (req, res) => {
 app.post("/api/tower-ads/click", async (req, res) => {
   try {
     const { impression_id } = req.body || {};
-    if (!impression_id)
-      return fail(res, "Missing impression_id", 400);
+    if (!impression_id) return fail(res, "Missing impression_id", 400);
 
     await pool.query(
       `
@@ -435,7 +526,6 @@ app.get("/admin/mediation", requireAdmin, async (req, res) => {
   res.json({ providers: r.rows });
 });
 
-
 app.post("/admin/mediation/toggle", requireAdmin, async (req, res) => {
   const { placement_id, provider, status } = req.body;
 
@@ -479,7 +569,6 @@ app.post("/admin/mediation/traffic", requireAdmin, async (req, res) => {
   res.json({ success: true });
 });
 
-
 // --------------------
 // ADMIN DASHBOARD STATS
 // --------------------
@@ -508,8 +597,6 @@ app.get("/admin/stats", requireAdmin, async (req, res) => {
   }
 });
 
-
-
 app.get("/admin/stats/providers", requireAdmin, async (req, res) => {
   const period = req.query.period || "today";
 
@@ -531,8 +618,6 @@ app.get("/admin/stats/providers", requireAdmin, async (req, res) => {
 
   res.json({ stats: r.rows });
 });
-
-
 
 // --------------------
 // START SERVER
