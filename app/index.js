@@ -152,25 +152,27 @@ async function getOrCreateAdvertiserByTelegram(tgUserId) {
     FROM advertisers
     WHERE telegram_user_id = $1
     `,
-    [tgUserId]
+    [String(tgUserId)]
   );
 
   if (r.rowCount) {
     return r.rows[0].id;
   }
 
+  // технический email чтобы пройти NOT NULL + UNIQUE
+  const email = `tg_${String(tgUserId)}@tg.local`;
+
   const created = await pool.query(
     `
-    INSERT INTO advertisers (telegram_user_id, status)
-    VALUES ($1, 'active')
+    INSERT INTO advertisers (email, telegram_user_id, status)
+    VALUES ($1, $2, 'active')
     RETURNING id
     `,
-    [tgUserId]
+    [email, String(tgUserId)]
   );
 
   return created.rows[0].id;
 }
-
 
 // --------------------
 // HEALTH CHECK
