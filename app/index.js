@@ -330,6 +330,95 @@ app.post("/admin/creatives/reject", requireAdmin, async (req, res) => {
   res.json({ success: true });
 });
 
+
+// --------------------
+// ADMIN: CREATE CREATIVE ORDER (START ADS)
+// --------------------
+app.post("/admin/creative-orders/create", requireAdmin, async (req, res) => {
+  try {
+    const { creative_id, impressions_total, price_usd } = req.body || {};
+
+    if (!creative_id || !impressions_total || !price_usd) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    // проверяем, что креатив approved
+    const cr = await pool.query(
+      `
+      SELECT id
+      FROM creatives
+      WHERE id = $1
+        AND status = 'approved'
+      `,
+      [creative_id]
+    );
+
+    if (!cr.rowCount) {
+      return res.status(400).json({ error: "Creative not approved" });
+    }
+
+    const pricePerImpression = price_usd / impressions_total;
+
+    // создаём заказ
+    const order = await pool.query(
+      `
+      INSERT INTO creative_orders (
+        creative_id,
+        impressions_total,
+        impressions_left,
+        price_usd,
+        price_per_impression,
+        status
+      )
+      VALUES ($1, $2, $2, $3, $4, 'active')
+      RETURNING id
+      `,
+      [creative_id, impressions_total, price_usd, pricePerImpression]
+    );
+
+    // создаём ad, чтобы реклама начала крутиться
+    await pool.query(
+      `
+      INSERT INTO ads (
+        id,
+        placement_id,
+        ad_type,
+        media_url,
+        click_url,
+        duration,
+        status,
+        source,
+        creative_id
+      )
+      SELECT
+        'usl_' || $1,
+        p.id,
+        p.ad_type,
+        c.media_url,
+        c.click_url,
+        c.duration,
+        'active',
+        'usl',
+        c.id
+      FROM creatives c
+      CROSS JOIN placements p
+      WHERE c.id = $1
+      LIMIT 1
+      `,
+      [creative_id]
+    );
+
+    res.json({
+      success: true,
+      order_id: order.rows[0].id,
+    });
+  } catch (err) {
+    console.error("❌ create creative order error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
 // --------------------
 // ADVERTISER (TG MINI APP)
 // --------------------
