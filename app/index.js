@@ -318,6 +318,57 @@ app.post("/admin/creatives/reject", requireAdmin, async (req, res) => {
   res.json({ success: true });
 });
 
+
+app.get("/admin/creatives", requireAdmin, async (req, res) => {
+  try {
+    const { status } = req.query;
+
+    const r = await pool.query(
+      `
+      SELECT
+        c.id,
+        c.type,
+        c.media_url,
+        c.click_url,
+        c.duration,
+        c.status,
+        c.created_at,
+        a.email AS advertiser_email
+      FROM creatives c
+      JOIN advertisers a ON a.id = c.advertiser_id
+      WHERE ($1::text IS NULL OR c.status = $1)
+      ORDER BY c.created_at DESC
+      `,
+      [status || null]
+    );
+
+    res.json({ creatives: r.rows });
+  } catch (err) {
+    console.error("❌ list creatives error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// --------------------
+// ADMIN: PRICING PLANS
+// --------------------
+app.get("/admin/pricing-plans", requireAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT id, name, impressions, price_usd
+      FROM pricing_plans
+      ORDER BY impressions ASC
+    `);
+
+    res.json({ plans: r.rows });
+  } catch (err) {
+    console.error("❌ pricing plans error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+
 // --------------------
 // ADMIN: CREATE CREATIVE ORDER (START ADS)
 // --------------------
