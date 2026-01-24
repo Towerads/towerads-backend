@@ -347,7 +347,7 @@ app.post("/admin/creative-orders/create", requireAdmin, async (req, res) => {
       `
       SELECT id
       FROM creatives
-      WHERE id = $1
+      WHERE id = $1::uuid
         AND status = 'approved'
       `,
       [creative_id]
