@@ -754,9 +754,9 @@ function requireTelegramUser(req, res, next) {
 // 1️⃣ Создать креатив (draft)
 app.post("/advertiser/creatives", requireTelegramUser, async (req, res) => {
   try {
-    const { type, media_url, click_url, duration } = req.body || {};
+    const { title, type, media_url, click_url, duration } = req.body || {};
 
-    if (!type || !media_url || !click_url) {
+    if (!title || !type || !media_url || !click_url) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
@@ -766,16 +766,24 @@ app.post("/advertiser/creatives", requireTelegramUser, async (req, res) => {
       `
       INSERT INTO creatives (
         advertiser_id,
+        title,
         type,
         media_url,
         click_url,
         duration,
         status
       )
-      VALUES ($1, $2, $3, $4, $5, 'draft')
+      VALUES ($1, $2, $3, $4, $5, $6, 'draft')
       RETURNING id, status
       `,
-      [advertiserId, type, media_url, click_url, duration || null]
+      [
+        advertiserId,
+        title,
+        type,
+        media_url,
+        click_url,
+        duration || null,
+      ]
     );
 
     res.json({ success: true, creative: r.rows[0] });
@@ -784,6 +792,7 @@ app.post("/advertiser/creatives", requireTelegramUser, async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
 
 // 2️⃣ Получить свои креативы
 app.get("/advertiser/creatives", requireTelegramUser, async (req, res) => {
