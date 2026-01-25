@@ -1253,26 +1253,44 @@ app.get("/admin/stats", requireAdmin, async (req, res) => {
 });
 
 app.get("/admin/stats/providers", requireAdmin, async (req, res) => {
-  const period = req.query.period || "today";
+  try {
+    const period = req.query.period || "today";
 
-  let interval = "1 day";
-  if (period === "7d") interval = "7 days";
-  if (period === "30d") interval = "30 days";
+    let interval = "1 day";
+    if (period === "7d") interval = "7 days";
+    if (period === "30d") interval = "30 days";
 
-  const r = await pool.query(`
-    SELECT
-      m.network AS provider,
-      COUNT(i.id) AS impressions,
-      COALESCE(SUM(i.revenue_usd), 0) AS revenue
-    FROM impressions i
-    JOIN ads a ON a.id = i.ad_id
-    JOIN mediation_config m ON m.placement_id = i.placement_id
-    WHERE i.created_at >= now() - interval '${interval}'
-    GROUP BY m.network
-  `);
+    const r = await pool.query(`
+      SELECT
+        m.network AS provider,
 
-  res.json({ stats: r.rows });
+        COUNT(i.id)::int AS impressions,
+
+        COALESCE(SUM(i.revenue_usd), 0)::numeric(12,6) AS revenue,
+
+        CASE
+          WHEN COUNT(i.id) = 0 THEN 0
+          ELSE (COALESCE(SUM(i.revenue_usd), 0) / COUNT(i.id)) * 1000
+        END::numeric(12,2) AS cpm
+
+      FROM impressions i
+      JOIN ads a ON a.id = i.ad_id
+      JOIN mediation_config m ON m.placement_id = i.placement_id
+
+      WHERE i.created_at >= now() - interval '${interval}'
+        AND i.status = 'impression'
+
+      GROUP BY m.network
+      ORDER BY m.network
+    `);
+
+    res.json({ stats: r.rows });
+  } catch (e) {
+    console.error("❌ /admin/stats/providers error:", e);
+    res.status(500).json({ error: "stats error" });
+  }
 });
+
 
 // --------------------
 // START SERVER
