@@ -1284,7 +1284,10 @@ app.get("/admin/stats/providers", requireAdmin, async (req, res) => {
       ORDER BY m.network
     `);
 
-    res.json({ stats: r.rows });
+    res.json({
+      success: true,
+      stats: r.rows,
+    });
   } catch (e) {
     console.error("❌ /admin/stats/providers error:", e);
     res.status(500).json({ error: "stats error" });
