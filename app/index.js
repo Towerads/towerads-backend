@@ -1267,22 +1267,13 @@ app.get("/admin/stats/providers", requireAdmin, async (req, res) => {
         COUNT(i.id)::int AS impressions,
 
         COALESCE(SUM(i.revenue_usd), 0)::numeric(12,6) AS revenue,
-        COALESCE(SUM(i.cost_usd), 0)::numeric(12,6) AS cost,
+        COALESCE(SUM(i.cost_usd), 0)::numeric(12,6)    AS cost,
+        (COALESCE(SUM(i.revenue_usd), 0) - COALESCE(SUM(i.cost_usd), 0))::numeric(12,6) AS profit,
 
         CASE
           WHEN COUNT(i.id) = 0 THEN 0
-          ELSE (SUM(i.revenue_usd) / COUNT(i.id)) * 1000
-        END::numeric(12,2) AS advertiser_cpm,
-
-        CASE
-          WHEN COUNT(i.id) = 0 THEN 0
-          ELSE (SUM(i.cost_usd) / COUNT(i.id)) * 1000
-        END::numeric(12,2) AS provider_cpm,
-
-        CASE
-          WHEN COUNT(i.id) = 0 THEN 0
-          ELSE ((SUM(i.revenue_usd) - SUM(i.cost_usd)) / COUNT(i.id)) * 1000
-        END::numeric(12,2) AS profit_cpm
+          ELSE (COALESCE(SUM(i.revenue_usd), 0) / COUNT(i.id)) * 1000
+        END::numeric(12,2) AS cpm
 
       FROM impressions i
       JOIN ads a ON a.id = i.ad_id
@@ -1301,6 +1292,7 @@ app.get("/admin/stats/providers", requireAdmin, async (req, res) => {
     res.status(500).json({ error: "stats error" });
   }
 });
+
 
 
 
