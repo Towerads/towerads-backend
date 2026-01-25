@@ -503,6 +503,180 @@ app.post("/admin/creative-orders/create", requireAdmin, async (req, res) => {
 
 
 // --------------------
+// ADMIN: ORDERS (creative_orders)
+// --------------------
+app.get("/admin/orders", requireAdmin, async (req, res) => {
+  try {
+    const { status, q, page = "1", limit = "20" } = req.query;
+
+    const p = Math.max(1, Number(page));
+    const l = Math.min(100, Math.max(1, Number(limit)));
+    const offset = (p - 1) * l;
+
+    const where = [];
+    const params = [];
+
+    if (status) {
+      params.push(status);
+      where.push(`co.status = $${params.length}`);
+    }
+
+    if (q) {
+      params.push(`%${q.toLowerCase()}%`);
+      where.push(`
+        (
+          LOWER(a.email) LIKE $${params.length}
+          OR co.id::text LIKE $${params.length}
+          OR c.id::text LIKE $${params.length}
+        )
+      `);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    const total = await pool.query(
+      `
+      SELECT COUNT(*)::int AS total
+      FROM creative_orders co
+      JOIN creatives c ON c.id = co.creative_id
+      JOIN advertisers a ON a.id = c.advertiser_id
+      ${whereSql}
+      `,
+      params
+    );
+
+    params.push(l, offset);
+
+    const r = await pool.query(
+      `
+      SELECT
+        co.id,
+        co.status,
+        co.impressions_total,
+        co.impressions_left,
+        co.price_usd,
+        co.created_at,
+
+        c.id AS creative_id,
+        c.type AS creative_type,
+
+        a.email AS advertiser_email,
+
+        (co.impressions_total - co.impressions_left)::int AS impressions_done
+      FROM creative_orders co
+      JOIN creatives c ON c.id = co.creative_id
+      JOIN advertisers a ON a.id = c.advertiser_id
+      ${whereSql}
+      ORDER BY co.created_at DESC
+      LIMIT $${params.length - 1}
+      OFFSET $${params.length}
+      `,
+      params
+    );
+
+    res.json({
+      items: r.rows,
+      total: total.rows[0].total,
+      page: p,
+      limit: l,
+    });
+  } catch (err) {
+    console.error("❌ admin orders error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.get("/admin/orders/:id", requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const r = await pool.query(
+      `
+      SELECT
+        co.*,
+        c.media_url,
+        c.click_url,
+        c.type AS creative_type,
+        a.email AS advertiser_email,
+        (co.impressions_total - co.impressions_left)::int AS impressions_done
+      FROM creative_orders co
+      JOIN creatives c ON c.id = co.creative_id
+      JOIN advertisers a ON a.id = c.advertiser_id
+      WHERE co.id = $1::uuid
+      `,
+      [id]
+    );
+
+    if (!r.rowCount) return res.status(404).json({ error: "Order not found" });
+
+    res.json({ order: r.rows[0] });
+  } catch (err) {
+    console.error("❌ admin order detail error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+app.post("/admin/orders/:id/pause", requireAdmin, async (req, res) => {
+  const r = await pool.query(
+    `
+    UPDATE creative_orders
+    SET status = 'paused'
+    WHERE id = $1::uuid AND status = 'active'
+    RETURNING id
+    `,
+    [req.params.id]
+  );
+
+  if (!r.rowCount) return res.status(400).json({ error: "Order not active" });
+  res.json({ success: true });
+});
+
+app.post("/admin/orders/:id/resume", requireAdmin, async (req, res) => {
+  const r = await pool.query(
+    `
+    UPDATE creative_orders
+    SET status = 'active'
+    WHERE id = $1::uuid AND status = 'paused'
+    RETURNING id
+    `,
+    [req.params.id]
+  );
+
+  if (!r.rowCount) return res.status(400).json({ error: "Order not paused" });
+  res.json({ success: true });
+});
+
+app.post("/admin/orders/:id/stop", requireAdmin, async (req, res) => {
+  const r = await pool.query(
+    `
+    UPDATE creative_orders
+    SET status = 'completed',
+        impressions_left = 0
+    WHERE id = $1::uuid
+      AND status IN ('active','paused')
+    RETURNING creative_id
+    `,
+    [req.params.id]
+  );
+
+  if (!r.rowCount) return res.status(400).json({ error: "Order not stoppable" });
+
+  await pool.query(
+    `
+    UPDATE ads
+    SET status = 'paused'
+    WHERE source = 'usl'
+      AND creative_id = $1::uuid
+    `,
+    [r.rows[0].creative_id]
+  );
+
+  res.json({ success: true });
+});
+
+
+
+// --------------------
 // ADVERTISER (TG MINI APP)
 // --------------------
 
