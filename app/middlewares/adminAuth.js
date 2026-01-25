@@ -1,6 +1,11 @@
 import jwt from "jsonwebtoken";
 
 export function requireAdmin(req, res, next) {
+  // 🔥 ВАЖНО: пропускаем preflight
+  if (req.method === "OPTIONS") {
+    return next();
+  }
+
   const header = req.headers.authorization;
 
   if (!header || !header.startsWith("Bearer ")) {
