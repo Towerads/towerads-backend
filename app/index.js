@@ -23,6 +23,7 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 
+
 app.use(
   cors({
     origin: [
@@ -34,6 +35,7 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+app.options("*", cors());
 
 // --------------------
 // DATABASE (Render-ready)
@@ -673,6 +675,7 @@ app.post("/admin/orders/:id/stop", requireAdmin, async (req, res) => {
 
   res.json({ success: true });
 });
+
 
 
 
