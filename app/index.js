@@ -635,34 +635,76 @@ app.get("/admin/orders/:id", requireAdmin, async (req, res) => {
 });
 
 app.post("/admin/orders/:id/pause", requireAdmin, async (req, res) => {
-  const r = await pool.query(
-    `
-    UPDATE creative_orders
-    SET status = 'paused'
-    WHERE id = $1::uuid AND status = 'active'
-    RETURNING id
-    `,
-    [req.params.id]
-  );
+  try {
+    const { id } = req.params;
 
-  if (!r.rowCount) return res.status(400).json({ error: "Order not active" });
-  res.json({ success: true });
+    const r = await pool.query(
+      `
+      UPDATE creative_orders
+      SET status = 'paused'
+      WHERE id = $1::uuid AND status = 'active'
+      RETURNING creative_id
+      `,
+      [id]
+    );
+
+    if (!r.rowCount) {
+      return res.status(400).json({ error: "Order not active" });
+    }
+
+    await pool.query(
+      `
+      UPDATE ads
+      SET status = 'paused'
+      WHERE source = 'usl'
+        AND creative_id = $1::uuid
+      `,
+      [r.rows[0].creative_id]
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("❌ PAUSE ORDER ERROR:", err);
+    return res.status(500).json({ error: "Pause failed" });
+  }
 });
+
 
 app.post("/admin/orders/:id/resume", requireAdmin, async (req, res) => {
-  const r = await pool.query(
-    `
-    UPDATE creative_orders
-    SET status = 'active'
-    WHERE id = $1::uuid AND status = 'paused'
-    RETURNING id
-    `,
-    [req.params.id]
-  );
+  try {
+    const { id } = req.params;
 
-  if (!r.rowCount) return res.status(400).json({ error: "Order not paused" });
-  res.json({ success: true });
+    const r = await pool.query(
+      `
+      UPDATE creative_orders
+      SET status = 'active'
+      WHERE id = $1::uuid AND status = 'paused'
+      RETURNING creative_id
+      `,
+      [id]
+    );
+
+    if (!r.rowCount) {
+      return res.status(400).json({ error: "Order not paused" });
+    }
+
+    await pool.query(
+      `
+      UPDATE ads
+      SET status = 'active'
+      WHERE source = 'usl'
+        AND creative_id = $1::uuid
+      `,
+      [r.rows[0].creative_id]
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("❌ RESUME ORDER ERROR:", err);
+    return res.status(500).json({ error: "Resume failed" });
+  }
 });
+
 
 app.post("/admin/orders/:id/stop", requireAdmin, async (req, res) => {
   const r = await pool.query(
