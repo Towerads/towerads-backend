@@ -36,9 +36,10 @@ const allowedOrigins = [
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  if (allowedOrigins.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin);
+  if (allowedOrigins.includes(origin) || !origin) {
+  res.header("Access-Control-Allow-Origin", origin || "*");
   }
+
 
   res.header("Access-Control-Allow-Credentials", "true");
   res.header(
@@ -116,6 +117,40 @@ async function requireActivePlacement(api_key, placement_id) {
 
   return { ok: true, placement: r.rows[0] };
 }
+
+
+// --------------------
+// ADVERTISER PROFILE (TG MINI APP)
+// --------------------
+app.get("/advertiser/me", requireTelegramUser, async (req, res) => {
+  try {
+    const advertiserId = await getOrCreateAdvertiserByTelegram(req.tgUserId);
+
+    const r = await pool.query(
+      `
+      SELECT
+        id,
+        telegram_user_id,
+        email,
+        status,
+        created_at
+      FROM advertisers
+      WHERE id = $1
+      `,
+      [advertiserId]
+    );
+
+    if (!r.rowCount) {
+      return res.status(404).json({ error: "Advertiser not found" });
+    }
+
+    res.json({ advertiser: r.rows[0] });
+  } catch (err) {
+    console.error("❌ /advertiser/me error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 async function pickAd(placement_id, ad_type) {
   // 1) Сначала пробуем USL
