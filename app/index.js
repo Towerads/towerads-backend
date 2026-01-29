@@ -853,6 +853,9 @@ app.post(
 // --------------------
 // API ENDPOINTS
 // --------------------
+// --------------------
+// API ENDPOINTS
+// --------------------
 app.post("/api/tower-ads/request", async (req, res) => {
   try {
     const { api_key, placement_id, user_data } = req.body || {};
@@ -864,44 +867,68 @@ app.post("/api/tower-ads/request", async (req, res) => {
     const k = await requireActiveApiKey(api_key);
     if (!k.ok) return fail(res, k.error, 401);
 
-    const provider = await decideProvider(placement_id);
-    if (provider !== "tower") {
-      return ok(res, { provider });
-    }
-
     const p = await requireActivePlacement(api_key, placement_id);
     if (!p.ok) return fail(res, p.error, 400);
 
-    const ad = await pickAd(placement_id, p.placement.ad_type);
-
-    if (!ad) return fail(res);
-
-    await pool.query("UPDATE ads SET last_shown_at = now() WHERE id = $1", [
-      ad.id,
-    ]);
+    // 1️⃣ выбираем провайдера
+    const provider = await decideProvider(placement_id);
 
     const impression_id = "imp_" + uuidv4().replace(/-/g, "");
 
+    // 2️⃣ всегда создаём impression
     await pool.query(
       `
       INSERT INTO impressions
-      (id, ad_id, placement_id, user_ip, device, os, status, source, creative_id, order_id)
-      VALUES ($1, $2, $3, $4, $5, $6, 'requested', $7, $8::uuid, $9::uuid)
+      (id, placement_id, status, source, network, user_ip, device, os)
+      VALUES ($1, $2, 'requested', $3, $4, $5, $6, $7)
       `,
       [
         impression_id,
-        ad.id,
         placement_id,
+        provider === "tower" ? "internal" : "external",
+        provider === "tower" ? null : provider,
         user_data?.ip || null,
         user_data?.device || null,
         user_data?.os || null,
-        ad.source || "external",
-        ad.creative_id || null,
-        ad.order_id || null,
       ]
     );
 
-    ok(res, {
+    // 3️⃣ если внешний провайдер — отдаём управление SDK
+    if (provider !== "tower") {
+      return ok(res, {
+        provider,
+        impression_id,
+      });
+    }
+
+    // 4️⃣ иначе — Tower / USL
+    const ad = await pickAd(placement_id, p.placement.ad_type);
+    if (!ad) return fail(res);
+
+    await pool.query(
+      "UPDATE ads SET last_shown_at = now() WHERE id = $1",
+      [ad.id]
+    );
+
+    // 5️⃣ дописываем данные рекламы
+    await pool.query(
+      `
+      UPDATE impressions
+      SET ad_id = $1,
+          creative_id = $2::uuid,
+          order_id = $3::uuid
+      WHERE id = $4
+      `,
+      [
+        ad.id,
+        ad.creative_id || null,
+        ad.order_id || null,
+        impression_id,
+      ]
+    );
+
+    // 6️⃣ отдаём рекламу
+    return ok(res, {
       provider: "tower",
       ad: {
         ad_id: ad.id,
@@ -914,9 +941,10 @@ app.post("/api/tower-ads/request", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ /request error:", err);
-    fail(res, "Server error", 500);
+    return fail(res, "Server error", 500);
   }
 });
+
 
 // --------------------
 // IMPRESSION
