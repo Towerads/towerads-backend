@@ -28,23 +28,15 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 
-const allowedOrigins = [
-  "http://localhost:3000",
-  "https://towerads-admin-web.onrender.com",
-];
-
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  if (allowedOrigins.includes(origin) || !origin) {
+  // Telegram Mini App CORS
   res.header("Access-Control-Allow-Origin", origin || "*");
-  }
-
-
   res.header("Access-Control-Allow-Credentials", "true");
   res.header(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization"
+    "Content-Type, Authorization, X-TG-USER-ID"
   );
   res.header(
     "Access-Control-Allow-Methods",
@@ -57,6 +49,7 @@ app.use((req, res, next) => {
 
   next();
 });
+
 
 
 // --------------------
