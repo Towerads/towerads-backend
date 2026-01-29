@@ -1,27 +1,25 @@
-export async function sendTelegramMessage(chatId, text) {
-  const token = process.env.TG_BOT_TOKEN;
-  if (!token) {
-    console.warn("⚠️ TG_BOT_TOKEN is missing");
-    return;
-  }
-  if (!chatId) return;
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+
+if (!BOT_TOKEN) {
+  console.warn("⚠️ TELEGRAM_BOT_TOKEN is not set");
+}
+
+export async function sendTelegramMessage(telegramUserId, text) {
+  if (!BOT_TOKEN || !telegramUserId) return;
+
+  const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
 
   try {
-    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chat_id: chatId,
+        chat_id: telegramUserId,
         text,
-        parse_mode: "Markdown",
+        parse_mode: "HTML",
       }),
     });
-
-    if (!r.ok) {
-      const errText = await r.text();
-      console.error("❌ Telegram API error:", r.status, errText);
-    }
-  } catch (e) {
-    console.error("❌ Telegram send error:", e);
+  } catch (err) {
+    console.error("❌ Telegram send error:", err);
   }
 }

@@ -7,6 +7,11 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { requireAdmin } from "./middlewares/adminAuth.js";
 import cookieParser from "cookie-parser";
+import { sendTelegramMessage } from "./services/telegram.js";
+
+
+
+
 
 dotenv.config();
 
@@ -283,58 +288,116 @@ app.get("/admin/creatives/pending", requireAdmin, async (req, res) => {
 });
 
 app.post("/admin/creatives/approve", requireAdmin, async (req, res) => {
-  const { creative_id } = req.body || {};
+  try {
+    const { creative_id } = req.body || {};
 
-  if (!creative_id) {
-    return res.status(400).json({ error: "Missing creative_id" });
+    if (!creative_id) {
+      return res.status(400).json({ error: "Missing creative_id" });
+    }
+
+    // 1️⃣ Обновляем креатив и получаем advertiser_id
+    const r = await pool.query(
+      `
+      UPDATE creatives
+      SET status = 'approved',
+          reject_reason = NULL,
+          updated_at = now()
+      WHERE id = $1::uuid
+        AND status = 'pending'
+      RETURNING advertiser_id
+      `,
+      [creative_id]
+    );
+
+    if (!r.rowCount) {
+      return res.status(400).json({ error: "Creative not in pending state" });
+    }
+
+    const advertiserId = r.rows[0].advertiser_id;
+
+    // 2️⃣ Получаем telegram_user_id рекламодателя
+    const adv = await pool.query(
+      `
+      SELECT telegram_user_id
+      FROM advertisers
+      WHERE id = $1
+      `,
+      [advertiserId]
+    );
+
+    // 3️⃣ Если есть TG — отправляем уведомление
+    if (adv.rowCount && adv.rows[0].telegram_user_id) {
+      const chatId = adv.rows[0].telegram_user_id;
+
+      await sendTelegramMessage(
+        chatId,
+        "✅ Ваше рекламное видео прошло модерацию и **одобрено**.\n\nТеперь оно может быть запущено в показ."
+      );
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ approve creative error:", err);
+    res.status(500).json({ error: "Server error" });
   }
-
-  const r = await pool.query(
-    `
-    UPDATE creatives
-    SET status = 'approved',
-        reject_reason = NULL,
-        updated_at = now()
-    WHERE id = $1::uuid
-      AND status = 'pending'
-    RETURNING id
-    `,
-    [creative_id]
-  );
-
-  if (!r.rowCount) {
-    return res.status(400).json({ error: "Creative not in pending state" });
-  }
-
-  res.json({ success: true });
 });
+
 
 app.post("/admin/creatives/reject", requireAdmin, async (req, res) => {
-  const { creative_id, reason } = req.body || {};
+  try {
+    const { creative_id, reason } = req.body || {};
 
-  if (!creative_id || !reason) {
-    return res.status(400).json({ error: "Missing creative_id or reason" });
+    if (!creative_id || !reason) {
+      return res.status(400).json({ error: "Missing creative_id or reason" });
+    }
+
+    // 1️⃣ Обновляем креатив и получаем advertiser_id
+    const r = await pool.query(
+      `
+      UPDATE creatives
+      SET status = 'rejected',
+          reject_reason = $2,
+          updated_at = now()
+      WHERE id = $1::uuid
+        AND status = 'pending'
+      RETURNING advertiser_id
+      `,
+      [creative_id, reason]
+    );
+
+    if (!r.rowCount) {
+      return res.status(400).json({ error: "Creative not in pending state" });
+    }
+
+    const advertiserId = r.rows[0].advertiser_id;
+
+    // 2️⃣ Получаем telegram_user_id рекламодателя
+    const adv = await pool.query(
+      `
+      SELECT telegram_user_id
+      FROM advertisers
+      WHERE id = $1
+      `,
+      [advertiserId]
+    );
+
+    // 3️⃣ Отправляем уведомление с причиной
+    if (adv.rowCount && adv.rows[0].telegram_user_id) {
+      const chatId = adv.rows[0].telegram_user_id;
+
+      await sendTelegramMessage(
+        chatId,
+        `❌ Ваше рекламное видео **не прошло модерацию**.\n\nПричина отклонения:\n${reason}`
+      );
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ reject creative error:", err);
+    res.status(500).json({ error: "Server error" });
   }
-
-  const r = await pool.query(
-    `
-    UPDATE creatives
-    SET status = 'rejected',
-        reject_reason = $2,
-        updated_at = now()
-    WHERE id = $1::uuid
-      AND status = 'pending'
-    RETURNING id
-    `,
-    [creative_id, reason]
-  );
-
-  if (!r.rowCount) {
-    return res.status(400).json({ error: "Creative not in pending state" });
-  }
-
-  res.json({ success: true });
 });
+
 
 
 app.get("/admin/creatives", requireAdmin, async (req, res) => {
