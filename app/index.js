@@ -224,6 +224,48 @@ async function getOrCreateAdvertiserByTelegram(tgUserId) {
   return created.rows[0].id;
 }
 
+
+// --------------------
+// ME (TG MINI APP ENTRY POINT)
+// --------------------
+app.get("/me", requireTelegramUser, async (req, res) => {
+  try {
+    // используем уже существующую логику
+    const advertiserId = await getOrCreateAdvertiserByTelegram(req.tgUserId);
+
+    const r = await pool.query(
+      `
+      SELECT
+        id,
+        telegram_user_id,
+        email,
+        status,
+        created_at
+      FROM advertisers
+      WHERE id = $1
+      `,
+      [advertiserId]
+    );
+
+    if (!r.rowCount) {
+      return res.status(404).json({ error: "Advertiser not found" });
+    }
+
+    res.json({
+      user: {
+        telegram_user_id: req.tgUserId,
+      },
+      role: "advertiser",
+      onboarded: true, // 🔹 позже сделаешь через БД
+      advertiser: r.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ /me error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
 // --------------------
 // HEALTH CHECK
 // --------------------
