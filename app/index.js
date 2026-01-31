@@ -494,6 +494,7 @@ app.get("/admin/creatives", requireAdmin, async (req, res) => {
 
       FROM creatives c
       JOIN advertisers a ON a.id = c.advertiser_id
+      LEFT JOIN campaigns cmp ON cmp.id = c.campaign_id
       LEFT JOIN pricing_plans p ON p.id = c.pricing_plan_id
 
       WHERE ($1::text IS NULL OR c.status = $1)
@@ -887,7 +888,15 @@ function requireTelegramUser(req, res, next) {
 // 1️⃣ Создать креатив (draft)
 app.post("/advertiser/creatives", requireTelegramUser, async (req, res) => {
   try {
-    const { title, type, media_url, click_url, duration } = req.body || {};
+    const {
+      title,
+      type,
+      media_url,
+      click_url,
+      duration,
+      campaign_id
+    } = req.body || {};
+
 
     if (!title || !type || !media_url || !click_url) {
       return res.status(400).json({ error: "Missing fields" });
@@ -899,6 +908,7 @@ app.post("/advertiser/creatives", requireTelegramUser, async (req, res) => {
       `
       INSERT INTO creatives (
         advertiser_id,
+        campaign_id,
         title,
         type,
         media_url,
@@ -906,11 +916,12 @@ app.post("/advertiser/creatives", requireTelegramUser, async (req, res) => {
         duration,
         status
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 'draft')
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'draft')
       RETURNING id, status
       `,
       [
         advertiserId,
+        campaign_id || null,
         title,
         type,
         media_url,
@@ -982,6 +993,47 @@ app.post(
     }
   }
 );
+
+
+// CREATE CAMPAIGN
+app.post("/advertiser/campaigns", requireTelegramUser, async (req, res) => {
+  try {
+    const { name, budget_usd } = req.body || {};
+
+    if (!name || !budget_usd) {
+      return res.status(400).json({ error: "name and budget_usd required" });
+    }
+
+    const advertiserId = await getOrCreateAdvertiserByTelegram(req.tgUserId);
+
+    const r = await pool.query(
+      `
+      INSERT INTO campaigns (
+        id,
+        advertiser_id,
+        name,
+        budget_usd,
+        status
+      )
+      VALUES (
+        gen_random_uuid()::text,
+        $1,
+        $2,
+        $3,
+        'pending'
+      )
+      RETURNING *
+      `,
+      [advertiserId, name, Number(budget_usd)]
+    );
+
+    res.json({ success: true, campaign: r.rows[0] });
+  } catch (err) {
+    console.error("❌ create campaign error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 // --------------------
 // API ENDPOINTS
