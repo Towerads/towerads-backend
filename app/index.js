@@ -145,7 +145,7 @@ app.get("/advertiser/me", requireTelegramUser, async (req, res) => {
 });
 
 
-async function pickAd(placement_id, ad_type) {
+async function pickAd(placement_id) {
   // 1) Сначала пробуем USL
   const usl = await pool.query(
     `
@@ -161,7 +161,6 @@ async function pickAd(placement_id, ad_type) {
     JOIN creatives c ON c.id = a.creative_id
     JOIN creative_orders co ON co.creative_id = c.id
     WHERE a.placement_id = $1
-      AND a.ad_type = $2
       AND a.status = 'active'
       AND a.source = 'usl'
       AND c.status = 'approved'
@@ -628,7 +627,7 @@ app.post("/admin/creative-orders/create", requireAdmin, async (req, res) => {
       SELECT
         'usl_' || replace(gen_random_uuid()::text, '-', ''),
         p.id,
-        p.ad_type,
+        c.type,
         c.media_url,
         c.click_url,
         c.duration,
@@ -1087,7 +1086,7 @@ app.post("/api/tower-ads/request", async (req, res) => {
     }
 
     // 4️⃣ иначе — Tower / USL
-    const ad = await pickAd(placement_id, p.placement.ad_type);
+    const ad = await pickAd(placement_id);
     if (!ad) return fail(res);
 
     await pool.query(
