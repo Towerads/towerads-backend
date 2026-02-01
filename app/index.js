@@ -340,6 +340,7 @@ app.get("/admin/creatives/pending", requireAdmin, async (req, res) => {
         c.type,
         c.media_url,
         c.click_url,
+        c.title,
         c.duration,
         c.created_at,
         a.email AS advertiser_email
@@ -944,7 +945,15 @@ app.get("/advertiser/creatives", requireTelegramUser, async (req, res) => {
 
     const r = await pool.query(
       `
-      SELECT id, type, media_url, click_url, duration, status, created_at
+      SELECT
+      id,
+      title,
+      type,
+      media_url,
+      click_url,
+      duration,
+      status,
+      created_at
       FROM creatives
       WHERE advertiser_id = $1
       ORDER BY created_at DESC
