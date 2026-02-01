@@ -337,7 +337,11 @@ app.get("/admin/creatives/pending", requireAdmin, async (req, res) => {
     const r = await pool.query(`
       SELECT
         c.id,
-        c.type,
+        CASE
+          WHEN c.media_url ~* '\.(jpg|jpeg|png|gif|jfif)$' THEN 'banner'
+          WHEN c.media_url ~* '\.(mp4|webm|mov)$' THEN 'video'
+          ELSE c.type
+        END AS type,
         c.media_url,
         c.click_url,
         c.title,
@@ -478,24 +482,27 @@ app.get("/admin/creatives", requireAdmin, async (req, res) => {
       `
       SELECT
         c.id,
-        c.type,
+        CASE
+          WHEN c.media_url ~* '\\.(jpg|jpeg|png|gif|jfif)$' THEN 'banner'
+          WHEN c.media_url ~* '\\.(mp4|webm|mov)$' THEN 'video'
+          ELSE c.type
+        END AS type,
         c.media_url,
         c.click_url,
+        c.title,
         c.duration,
         c.status,
         c.created_at,
 
         a.email AS advertiser_email,
 
-        p.id          AS pricing_plan_id,
-        p.name        AS pricing_name,
-        p.impressions AS impressions,
-        p.price_usd   AS price_usd
+        co.price_usd AS price_usd
 
       FROM creatives c
       JOIN advertisers a ON a.id = c.advertiser_id
-      LEFT JOIN campaigns cmp ON cmp.id = c.campaign_id
-      LEFT JOIN pricing_plans p ON p.id = c.pricing_plan_id
+      LEFT JOIN creative_orders co
+        ON co.creative_id = c.id
+        AND co.status = 'active'
 
       WHERE ($1::text IS NULL OR c.status = $1)
       ORDER BY c.created_at DESC
