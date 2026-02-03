@@ -1444,27 +1444,44 @@ app.get("/api/tower-ads/stats", async (req, res) => {
 // MEDIATION
 // --------------------
 async function decideProvider(placement_id) {
-  const r = await pool.query(
-    `
-    SELECT network, traffic_percentage
+  const r = await pool.query(`
+    SELECT network
     FROM mediation_config
     WHERE placement_id = $1
       AND status = 'active'
-    `,
-    [placement_id]
-  );
+      AND traffic_percentage > 0
+    ORDER BY priority DESC, id ASC
+  `, [placement_id]);
 
   if (!r.rowCount) return "tower";
 
-  const rand = Math.random() * 100;
-  let acc = 0;
+  const providers = r.rows.map(r => r.network);
 
-  for (const row of r.rows) {
-    acc += Number(row.traffic_percentage);
-    if (rand <= acc) return row.network;
+  const state = await pool.query(`
+    SELECT last_network
+    FROM mediation_state
+    WHERE placement_id = $1
+  `, [placement_id]);
+
+  let nextProvider;
+  if (!state.rowCount || !state.rows[0].last_network) {
+    nextProvider = providers[0];
+  } else {
+    const last = state.rows[0].last_network;
+    const idx = providers.indexOf(last);
+    nextProvider = providers[(idx + 1) % providers.length];
   }
 
-  return "tower";
+  await pool.query(`
+    INSERT INTO mediation_state (placement_id, last_network, last_shown_at)
+    VALUES ($1, $2, now())
+    ON CONFLICT (placement_id)
+    DO UPDATE SET
+      last_network = EXCLUDED.last_network,
+      last_shown_at = now()
+  `, [placement_id, nextProvider]);
+
+  return nextProvider;
 }
 
 app.get("/admin/mediation", requireAdmin, async (req, res) => {
