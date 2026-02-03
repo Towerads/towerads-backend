@@ -1205,6 +1205,27 @@ app.post("/api/tower-ads/impression", async (req, res) => {
       return fail(res, "Captcha not verified", 403);
     }
 
+
+    // 🔁 external / usl — просто фиксируем impression
+    const src = await pool.query(
+       `SELECT source FROM impressions WHERE id = $1`,
+       [impression_id]
+    );
+    
+    if (src.rowCount && src.rows[0].source !== "tower") {
+      await pool.query(
+        `
+        UPDATE impressions
+        SET status = 'impression'
+        WHERE id = $1
+          AND status = 'requested'
+        `,
+        [impression_id]
+      );
+
+      return ok(res);
+    }
+
     const meta = await pool.query(
       `
       SELECT
