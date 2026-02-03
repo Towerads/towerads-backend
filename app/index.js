@@ -1080,23 +1080,45 @@ app.post("/api/tower-ads/request", async (req, res) => {
 
     const impression_id = "imp_" + uuidv4().replace(/-/g, "");
 
-    // 2️⃣ всегда создаём impression
-    await pool.query(
-      `
-      INSERT INTO impressions
-      (id, placement_id, status, source, network, user_ip, device, os)
-      VALUES ($1, $2, 'requested', $3, $4, $5, $6, $7)
-      `,
-      [
+    // 🛡️ АНТИФРОД: защита от спама по session_id
+    if (user_data?.session_id) {
+      const dup = await pool.query(
+        `
+        SELECT 1
+        FROM impressions
+        WHERE session_id = $1
+          AND created_at > now() - interval '30 seconds'
+        `,
+        [user_data.session_id]
+      );
+      if (dup.rowCount) {
+        return fail(res, "Duplicate session", 429);
+      }
+    }
+
+    
+  // 2️⃣ всегда создаём impression с антифрод полями
+  await pool.query(
+    `
+    INSERT INTO impressions
+    (id, placement_id, status, source, network, user_ip, device, os, session_id, user_agent, referer, captcha_verified)
+    VALUES ($1, $2, 'requested', $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `,
+    [
         impression_id,
         placement_id,
-        provider === "tower" ? "internal" : "external",
-        provider === "tower" ? null : provider,
-        user_data?.ip || null,
-        user_data?.device || null,
-        user_data?.os || null,
-      ]
-    );
+        provider === "tower" ? "internal" : "external", // source
+        provider === "tower" ? null : provider,         // network
+        user_data?.ip || null,                          // user_ip
+        user_data?.device || null,                      // device
+        user_data?.os || null,                          // os
+        user_data?.session_id || null,                  // 🔹 session_id для антифрода
+        user_data?.user_agent || null,                  // 🔹 user_agent
+        user_data?.referer || null,                     // 🔹 referer
+        user_data?.captcha_verified ?? true            // 🔹 captcha_verified
+    ]
+);
+
 
     // 3️⃣ если внешний провайдер — отдаём управление SDK
     if (provider !== "tower") {
@@ -1158,6 +1180,30 @@ app.post("/api/tower-ads/impression", async (req, res) => {
   try {
     const { impression_id } = req.body || {};
     if (!impression_id) return fail(res, "Missing impression_id", 400);
+
+
+    // 🛡️ АНТИФРОД ПРОВЕРКА 
+    const fraudCheck = await pool.query(
+      `
+      SELECT is_fraud, captcha_verified
+      FROM impressions
+      WHERE id = $1
+        AND status = 'requested'
+      `,
+      [impression_id]
+    );
+
+    if (!fraudCheck.rowCount) {
+      return fail(res, "Invalid impression", 400);
+    }
+
+    if (fraudCheck.rows[0].is_fraud) {
+      return fail(res, "Fraud impression", 403);
+    }
+
+    if (!fraudCheck.rows[0].captcha_verified) {
+      return fail(res, "Captcha not verified", 403);
+    }
 
     const meta = await pool.query(
       `
