@@ -112,6 +112,7 @@ async function requireActiveApiKey(api_key) {
   return { ok: true };
 }
 
+
 async function requireActivePlacement(api_key, placement_id) {
   const r = await pool.query(
     `
