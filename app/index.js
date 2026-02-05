@@ -26,6 +26,18 @@ const { Pool } = pkg;
 const app = express();
 
 app.use(express.json());
+
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/tower-ads")) {
+    console.log("📥 INCOMING REQUEST");
+    console.log("PATH:", req.path);
+    console.log("BODY:", JSON.stringify(req.body, null, 2));
+    console.log("HEADERS:", req.headers);
+  }
+  next();
+});
+
+
 app.use(cookieParser());
 
 app.use(
@@ -79,11 +91,13 @@ pool
 // HELPERS
 // --------------------
 function ok(res, body = {}) {
-  res.json({ success: true, ...body });
+  return res.json({ success: true, ...body });
 }
 
+
+const INTERNAL_PROVIDERS = ["tower", "usl"];
 function fail(res, error = "No ad available", code = 200) {
-  res.status(code).json({ success: false, error });
+  return res.status(code).json({ success: false, error });
 }
 
 async function requireActiveApiKey(api_key) {
@@ -150,7 +164,7 @@ app.get("/advertiser/me", requireTelegramUser, async (req, res) => {
 });
 
 
-async function pickAd(placement_id) {
+async function pickAd(placement_id, ad_type) {
   // 1) Сначала пробуем USL
   const usl = await pool.query(
     `
@@ -166,6 +180,7 @@ async function pickAd(placement_id) {
     JOIN creatives c ON c.id = a.creative_id
     JOIN creative_orders co ON co.creative_id = c.id
     WHERE a.placement_id = $1
+      AND a.ad_type = $2
       AND a.status = 'active'
       AND a.source = 'usl'
       AND c.status = 'approved'
@@ -1077,8 +1092,14 @@ app.post("/api/tower-ads/request", async (req, res) => {
 
     // 1️⃣ выбираем провайдера
     const provider = await decideProvider(placement_id);
-
+    const isInternal = INTERNAL_PROVIDERS.includes(provider);
     const impression_id = "imp_" + uuidv4().replace(/-/g, "");
+
+    const source =
+      provider === "tower" ? "tower" :
+      provider === "usl"   ? "usl"   :
+      "external";
+    const network = source === "external" ? provider : null;
 
     // 🛡️ АНТИФРОД: защита от спама по session_id
     if (user_data?.session_id) {
@@ -1107,8 +1128,8 @@ app.post("/api/tower-ads/request", async (req, res) => {
     [
         impression_id,
         placement_id,
-        provider === "tower" ? "internal" : "external", // source
-        provider === "tower" ? null : provider,         // network
+        source, // source
+        network,         // network
         user_data?.ip || null,                          // user_ip
         user_data?.device || null,                      // device
         user_data?.os || null,                          // os
@@ -1121,15 +1142,12 @@ app.post("/api/tower-ads/request", async (req, res) => {
 
 
     // 3️⃣ если внешний провайдер — отдаём управление SDK
-    if (provider !== "tower") {
-      return ok(res, {
-        provider,
-        impression_id,
-      });
+    if (!isInternal) {
+      return ok(res, { provider, impression_id });
     }
 
     // 4️⃣ иначе — Tower / USL
-    const ad = await pickAd(placement_id);
+    const ad = await pickAd(placement_id, p.placement.ad_type);
     if (!ad) return fail(res);
 
     await pool.query(
@@ -1156,7 +1174,7 @@ app.post("/api/tower-ads/request", async (req, res) => {
 
     // 6️⃣ отдаём рекламу
     return ok(res, {
-      provider: "tower",
+      provider,
       ad: {
         ad_id: ad.id,
         ad_type: ad.ad_type,
@@ -1212,7 +1230,7 @@ app.post("/api/tower-ads/impression", async (req, res) => {
        [impression_id]
     );
     
-    if (src.rowCount && src.rows[0].source !== "tower") {
+    if (src.rowCount && src.rows[0].source === "external") {
       await pool.query(
         `
         UPDATE impressions
