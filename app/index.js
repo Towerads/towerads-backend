@@ -1166,14 +1166,13 @@ app.post("/api/tower-ads/provider-result-batch", async (req, res) => {
       await pool.query(
         `
         INSERT INTO impression_attempts
-          (impression_id, provider, status, error)
+          (impression_id, provider, result, error)
         VALUES
           ($1, $2, $3, $4)
         `,
         [
           impression_id,
-          a.provider || null,
-          a.status || "unknown", 
+          a.provider,
           result,    // filled / no_fill / error
           a.error || null
         ]
