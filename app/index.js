@@ -1156,10 +1156,12 @@ app.post("/api/tower-ads/provider-result-batch", async (req, res) => {
 
     // 1) сохраняем все попытки (для аналитики)
     for (const a of attempts) {
-      const result =
-        a.status === "no_fill" ? "nofill" :
-        a.status === "noFill"  ? "nofill" :
-        (a.status || "error");
+      if (!a?.provider) continue;
+
+      // нормализуем под constraint: filled | nofill | error
+      let result = (a.status || "error").toLowerCase();
+      if (result === "no_fill" || result === "no-fill" || result === "nofill") result = "nofill";
+      if (!["filled", "nofill", "error"].includes(result)) result = "error";
 
       await pool.query(
         `
