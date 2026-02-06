@@ -1,5 +1,4 @@
 import express from "express";
-import cors from "cors";
 import pkg from "pg";
 import { v4 as uuidv4 } from "uuid";
 import dotenv from "dotenv";
@@ -86,6 +85,18 @@ pool
   .query("SELECT 1")
   .then(() => console.log("✅ PostgreSQL connected"))
   .catch((err) => console.error("❌ PostgreSQL connection error:", err));
+
+
+function requireTelegramUser(req, res, next) {
+  const tgUserId = req.header("X-TG-USER-ID");
+  if (!tgUserId) {
+    return res.status(401).json({ error: "Missing Telegram user id" });
+  }
+  req.tgUserId = tgUserId;
+  next();
+}
+
+
 
 // --------------------
 // HELPERS
@@ -897,22 +908,6 @@ app.post("/admin/orders/:id/stop", requireAdmin, async (req, res) => {
 });
 
 
-
-
-// --------------------
-// ADVERTISER (TG MINI APP)
-// --------------------
-
-// middleware: получить TG user id
-function requireTelegramUser(req, res, next) {
-  const tgUserId = req.header("X-TG-USER-ID");
-  if (!tgUserId) {
-    return res.status(401).json({ error: "Missing Telegram user id" });
-  }
-  req.tgUserId = tgUserId;
-  next();
-}
-
 // 1️⃣ Создать креатив (draft)
 app.post("/advertiser/creatives", requireTelegramUser, async (req, res) => {
   try {
@@ -1077,6 +1072,7 @@ app.post("/advertiser/campaigns", requireTelegramUser, async (req, res) => {
 // --------------------
 // API ENDPOINTS
 // --------------------
+
 app.post("/api/tower-ads/request", async (req, res) => {
   try {
     const { api_key, placement_id, user_data } = req.body || {};
@@ -1091,16 +1087,9 @@ app.post("/api/tower-ads/request", async (req, res) => {
     const p = await requireActivePlacement(api_key, placement_id);
     if (!p.ok) return fail(res, p.error, 400);
 
-    // 1️⃣ выбираем провайдера
-    const provider = await decideProvider(placement_id);
-    const isInternal = INTERNAL_PROVIDERS.includes(provider);
+    // 1️⃣ WATERFALL провайдеров
+    const providers = await decideProviders(placement_id);
     const impression_id = "imp_" + uuidv4().replace(/-/g, "");
-
-    const source =
-      provider === "tower" ? "tower" :
-      provider === "usl"   ? "usl"   :
-      "external";
-    const network = source === "external" ? provider : null;
 
     // 🛡️ АНТИФРОД: защита от спама по session_id
     if (user_data?.session_id) {
@@ -1118,78 +1107,98 @@ app.post("/api/tower-ads/request", async (req, res) => {
       }
     }
 
-    
-  // 2️⃣ всегда создаём impression с антифрод полями
-  await pool.query(
-    `
-    INSERT INTO impressions
-    (id, placement_id, status, source, network, user_ip, device, os, session_id, user_agent, referer, captcha_verified)
-    VALUES ($1, $2, 'requested', $3, $4, $5, $6, $7, $8, $9, $10, $11)
-    `,
-    [
-        impression_id,
-        placement_id,
-        source, // source
-        network,         // network
-        user_data?.ip || null,                          // user_ip
-        user_data?.device || null,                      // device
-        user_data?.os || null,                          // os
-        user_data?.session_id || null,                  // 🔹 session_id для антифрода
-        user_data?.user_agent || null,                  // 🔹 user_agent
-        user_data?.referer || null,                     // 🔹 referer
-        user_data?.captcha_verified ?? true            // 🔹 captcha_verified
-    ]
-);
-
-
-    // 3️⃣ если внешний провайдер — отдаём управление SDK
-    if (!isInternal) {
-      return ok(res, { provider, impression_id });
-    }
-
-    // 4️⃣ иначе — Tower / USL
-    const ad = await pickAd(placement_id, p.placement.ad_type);
-    if (!ad) return fail(res);
-
-    await pool.query(
-      "UPDATE ads SET last_shown_at = now() WHERE id = $1",
-      [ad.id]
-    );
-
-    // 5️⃣ дописываем данные рекламы
+    // 2️⃣ создаём impression (пока НЕ знаем кто реально покажет)
     await pool.query(
       `
-      UPDATE impressions
-      SET ad_id = $1,
-          creative_id = $2::uuid,
-          order_id = $3::uuid
-      WHERE id = $4
+      INSERT INTO impressions
+      (id, placement_id, status, source, network, providers, user_ip, device, os, session_id, user_agent, referer, captcha_verified)
+      VALUES ($1, $2, 'requested', 'external', NULL, $3, $4, $5, $6, $7, $8, $9, $10)
       `,
       [
-        ad.id,
-        ad.creative_id || null,
-        ad.order_id || null,
         impression_id,
+        placement_id,
+        JSON.stringify(providers),
+        user_data?.ip || null,
+        user_data?.device || null,
+        user_data?.os || null,
+        user_data?.session_id || null,
+        user_data?.user_agent || null,
+        user_data?.referer || null,
+        user_data?.captcha_verified ?? true
       ]
     );
 
-    // 6️⃣ отдаём рекламу
-    return ok(res, {
-      provider,
-      ad: {
-        ad_id: ad.id,
-        ad_type: ad.ad_type,
-        media_url: ad.media_url,
-        click_url: ad.click_url,
-        duration: ad.duration,
-      },
-      impression_id,
-    });
+    // ✅ ВОТ СЮДА (ПОСЛЕ INSERT) — сразу отвечаем waterfall
+    return ok(res, { providers, impression_id });
   } catch (err) {
     console.error("❌ /request error:", err);
     return fail(res, "Server error", 500);
   }
 });
+
+
+// --------------------
+// PROVIDER RESULT (SDK callback)
+// --------------------
+app.post("/api/tower-ads/provider-result-batch", async (req, res) => {
+  try {
+    const { impression_id, attempts, served_provider } = req.body || {};
+
+    if (!impression_id) return fail(res, "Missing impression_id", 400);
+    if (!Array.isArray(attempts)) return fail(res, "Missing attempts[]", 400);
+
+    const imp = await pool.query(
+      `SELECT 1 FROM impressions WHERE id = $1 AND status = 'requested'`,
+      [impression_id]
+    );
+    if (!imp.rowCount) return fail(res, "Invalid impression state", 400);
+
+
+    // 1) сохраняем все попытки (для аналитики)
+    for (const a of attempts) {
+      await pool.query(
+        `
+        INSERT INTO impression_attempts
+          (impression_id, provider, status, error)
+        VALUES
+          ($1, $2, $3, $4)
+        `,
+        [
+          impression_id,
+          a.provider || null,
+          a.status || "unknown",     // filled / no_fill / error
+          a.error || null
+        ]
+      );
+    }
+
+    // 2) если был fill — обновляем impressions.served_provider + served_at
+    if (served_provider) {
+      const allowed = attempts.map(a => a.provider).filter(Boolean);
+
+      if (!allowed.includes(served_provider)) {
+        return fail(res, "served_provider not in attempts", 400);
+      }
+      
+      await pool.query(
+        `
+        UPDATE impressions
+        SET served_provider = $1,
+          served_at = now()
+        WHERE id = $2
+          AND status = 'requested'
+        `,
+        [served_provider, impression_id]
+      );
+    }
+
+    return ok(res);
+  } catch (e) {
+    console.error("❌ /provider-result-batch error:", e);
+    return fail(res, "Server error", 500);
+  }
+});
+
 
 
 // --------------------
@@ -1227,11 +1236,15 @@ app.post("/api/tower-ads/impression", async (req, res) => {
 
     // 🔁 external / usl — просто фиксируем impression
     const src = await pool.query(
-       `SELECT source FROM impressions WHERE id = $1`,
+       `SELECT source, served_provider FROM impressions WHERE id = $1`,
        [impression_id]
     );
     
     if (src.rowCount && src.rows[0].source === "external") {
+      if (!src.rows[0].served_provider) {
+        return ok(res, { filled: false });
+      }
+
       await pool.query(
         `
         UPDATE impressions
@@ -1239,6 +1252,7 @@ app.post("/api/tower-ads/impression", async (req, res) => {
         WHERE id = $1
           AND status = 'requested'
         `,
+        
         [impression_id]
       );
 
@@ -1502,6 +1516,52 @@ async function decideProvider(placement_id) {
 
   return nextProvider;
 }
+
+
+async function decideProviders(placement_id) {
+  const r = await pool.query(`
+    SELECT network
+    FROM mediation_config
+    WHERE placement_id = $1
+      AND status = 'active'
+      AND traffic_percentage > 0
+    ORDER BY priority DESC, id ASC
+  `, [placement_id]);
+
+  if (!r.rowCount) return ["tower"];
+
+  const providers = r.rows.map(x => x.network);
+
+  const state = await pool.query(`
+    SELECT last_network
+    FROM mediation_state
+    WHERE placement_id = $1
+  `, [placement_id]);
+
+  let start = 0;
+  if (state.rowCount && state.rows[0].last_network) {
+    const idx = providers.indexOf(state.rows[0].last_network);
+    start = idx >= 0 ? (idx + 1) % providers.length : 0;
+  }
+
+  const ordered = [
+    ...providers.slice(start),
+    ...providers.slice(0, start),
+  ];
+
+  await pool.query(`
+    INSERT INTO mediation_state (placement_id, last_network, last_shown_at)
+    VALUES ($1, $2, now())
+    ON CONFLICT (placement_id)
+    DO UPDATE SET
+      last_network = EXCLUDED.last_network,
+      last_shown_at = now()
+  `, [placement_id, ordered[0]]);
+
+  return ordered;
+}
+
+
 
 app.get("/admin/mediation", requireAdmin, async (req, res) => {
   const r = await pool.query(`
