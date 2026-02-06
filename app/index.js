@@ -1156,6 +1156,11 @@ app.post("/api/tower-ads/provider-result-batch", async (req, res) => {
 
     // 1) сохраняем все попытки (для аналитики)
     for (const a of attempts) {
+      const result =
+        a.status === "no_fill" ? "nofill" :
+        a.status === "noFill"  ? "nofill" :
+        (a.status || "error");
+
       await pool.query(
         `
         INSERT INTO impression_attempts
@@ -1166,7 +1171,8 @@ app.post("/api/tower-ads/provider-result-batch", async (req, res) => {
         [
           impression_id,
           a.provider || null,
-          a.status || "unknown",     // filled / no_fill / error
+          a.status || "unknown", 
+          result,    // filled / no_fill / error
           a.error || null
         ]
       );
@@ -1179,7 +1185,7 @@ app.post("/api/tower-ads/provider-result-batch", async (req, res) => {
       if (!allowed.includes(served_provider)) {
         return fail(res, "served_provider not in attempts", 400);
       }
-      
+
       await pool.query(
         `
         UPDATE impressions
