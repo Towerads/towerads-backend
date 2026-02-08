@@ -1,9 +1,25 @@
 import { Router } from "express";
 import { requireTelegramUser } from "../middlewares/requireTelegramUser.js";
 
-import { advertiserMe, me } from "../controllers/advertiser/advertiserController.js";
-import { createCreative, listCreatives, submitCreative } from "../controllers/advertiser/creativesController.js";
+import * as adv from "../controllers/advertiser/advertiserController.js";
+
+import {
+  createCreative,
+  listCreatives,
+  submitCreative,
+} from "../controllers/advertiser/creativesController.js";
+
 import { createCampaign } from "../controllers/advertiser/campaignsController.js";
+
+console.log("ADV EXPORTS:", Object.keys(adv));
+
+const advertiserMe = adv.advertiserMe;
+const me = adv.me;
+
+if (typeof advertiserMe !== "function" || typeof me !== "function") {
+  console.error("❌ advertiserController exports are wrong:", Object.keys(adv));
+  throw new Error("advertiserController.js must export named functions advertiserMe and me");
+}
 
 const router = Router();
 
@@ -16,7 +32,8 @@ router.post("/advertiser/creatives/:id/submit", requireTelegramUser, submitCreat
 
 router.post("/advertiser/campaigns", requireTelegramUser, createCampaign);
 
-// ✅ и так, и так
 export default router;
 export { router };
+
+
 
