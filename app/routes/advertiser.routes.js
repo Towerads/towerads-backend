@@ -2,24 +2,36 @@ import { Router } from "express";
 import { requireTelegramUser } from "../middlewares/requireTelegramUser.js";
 
 import * as adv from "../controllers/advertiser/advertiserController.js";
-
-import {
-  createCreative,
-  listCreatives,
-  submitCreative,
-} from "../controllers/advertiser/creativesController.js";
-
-import { createCampaign } from "../controllers/advertiser/campaignsController.js";
+import * as creatives from "../controllers/advertiser/creativesController.js";
+import * as campaigns from "../controllers/advertiser/campaignsController.js";
 
 console.log("ADV EXPORTS:", Object.keys(adv));
+console.log("CREATIVES EXPORTS:", Object.keys(creatives));
+console.log("CAMPAIGNS EXPORTS:", Object.keys(campaigns));
 
 const advertiserMe = adv.advertiserMe;
 const me = adv.me;
 
-if (typeof advertiserMe !== "function" || typeof me !== "function") {
-  console.error("❌ advertiserController exports are wrong:", Object.keys(adv));
-  throw new Error("advertiserController.js must export named functions advertiserMe and me");
-}
+const createCreative = creatives.createCreative;
+const listCreatives = creatives.listCreatives;
+const submitCreative = creatives.submitCreative;
+
+const createCampaign = campaigns.createCampaign;
+
+// Жёсткая проверка, чтобы сразу было понятно, чего не хватает
+const mustBeFn = (name, fn, keys) => {
+  if (typeof fn !== "function") {
+    console.error(`❌ Missing export: ${name}. Available:`, keys);
+    throw new Error(`Missing export: ${name}`);
+  }
+};
+
+mustBeFn("advertiserMe", advertiserMe, Object.keys(adv));
+mustBeFn("me", me, Object.keys(adv));
+mustBeFn("createCreative", createCreative, Object.keys(creatives));
+mustBeFn("listCreatives", listCreatives, Object.keys(creatives));
+mustBeFn("submitCreative", submitCreative, Object.keys(creatives));
+mustBeFn("createCampaign", createCampaign, Object.keys(campaigns));
 
 const router = Router();
 
@@ -34,6 +46,7 @@ router.post("/advertiser/campaigns", requireTelegramUser, createCampaign);
 
 export default router;
 export { router };
+
 
 
 
