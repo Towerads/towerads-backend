@@ -14,7 +14,8 @@ async function requireActiveApiKey(api_key) {
   ]);
 
   if (r.rowCount === 0) return { ok: false, error: "Invalid api_key" };
-  if (r.rows[0].status !== "active") return { ok: false, error: "api_key inactive" };
+  if (r.rows[0].status !== "active")
+    return { ok: false, error: "api_key inactive" };
 
   return { ok: true };
 }
@@ -30,7 +31,8 @@ async function requireActivePlacement(api_key, placement_id) {
   );
 
   if (r.rowCount === 0) return { ok: false, error: "Invalid placement_id" };
-  if (r.rows[0].status !== "active") return { ok: false, error: "placement paused" };
+  if (r.rows[0].status !== "active")
+    return { ok: false, error: "placement paused" };
 
   return { ok: true, placement: r.rows[0] };
 }
@@ -41,12 +43,16 @@ async function requireActivePlacement(api_key, placement_id) {
 async function decideProviders(placement_id) {
   const r = await pool.query(
     `
-    SELECT network
-    FROM mediation_config
-    WHERE placement_id = $1
-      AND status = 'active'
-      AND traffic_percentage > 0
-    ORDER BY priority DESC, id ASC
+    SELECT mc.network
+    FROM mediation_config mc
+    LEFT JOIN mediation_provider_state ps
+        ON ps.placement_id = mc.placement_id
+        AND ps.network = mc.network
+    WHERE mc.placement_id = $1
+        AND mc.status = 'active'
+        AND mc.traffic_percentage > 0
+        AND (ps.exhausted_until IS NULL OR ps.exhausted_until <= now())
+    ORDER BY mc.priority DESC, mc.id ASC
     `,
     [placement_id]
   );
@@ -160,20 +166,32 @@ export async function providerResultBatch(req, res) {
     if (!impression_id) return fail(res, "Missing impression_id", 400);
     if (!Array.isArray(attempts)) return fail(res, "Missing attempts[]", 400);
 
+    // ✅ сразу берём placement_id, чтобы писать provider_state
     const imp = await pool.query(
-      `SELECT 1 FROM impressions WHERE id = $1 AND status = 'requested'`,
+      `SELECT placement_id FROM impressions WHERE id = $1 AND status = 'requested'`,
       [impression_id]
     );
     if (!imp.rowCount) return fail(res, "Invalid impression state", 400);
 
-    // 1) сохраняем все попытки (для аналитики)
+    const placementId = imp.rows[0].placement_id;
+
+    // ✅ после 3 nofill подряд считаем “закончилась до конца дня”
+    const NOFILL_LIMIT = 3;
+
+    // 1) сохраняем все попытки (для аналитики) + обновляем provider_state
     for (const a of attempts) {
       if (!a?.provider) continue;
 
       let result = (a.status || "error").toLowerCase();
-      if (result === "no_fill" || result === "no-fill" || result === "nofill") result = "nofill";
+      if (
+        result === "no_fill" ||
+        result === "no-fill" ||
+        result === "nofill"
+      )
+        result = "nofill";
       if (!["filled", "nofill", "error"].includes(result)) result = "error";
 
+      // 1.1) attempts лог
       await pool.query(
         `
         INSERT INTO impression_attempts
@@ -183,6 +201,70 @@ export async function providerResultBatch(req, res) {
         `,
         [impression_id, a.provider, result, a.error || null]
       );
+
+      // 1.2) provider_state
+      if (result === "filled") {
+        await pool.query(
+          `
+          INSERT INTO mediation_provider_state
+            (placement_id, network, nofill_streak, last_result, last_error, exhausted_until, updated_at)
+          VALUES ($1, $2, 0, 'filled', NULL, NULL, now())
+          ON CONFLICT (placement_id, network)
+          DO UPDATE SET
+            nofill_streak = 0,
+            last_result = 'filled',
+            last_error = NULL,
+            exhausted_until = NULL,
+            updated_at = now()
+          `,
+          [placementId, a.provider]
+        );
+      } else if (result === "nofill") {
+        // увеличиваем streak
+        await pool.query(
+          `
+          INSERT INTO mediation_provider_state
+            (placement_id, network, nofill_streak, last_result, last_error, updated_at)
+          VALUES ($1, $2, 1, 'nofill', $3, now())
+          ON CONFLICT (placement_id, network)
+          DO UPDATE SET
+            nofill_streak = mediation_provider_state.nofill_streak + 1,
+            last_result = 'nofill',
+            last_error = EXCLUDED.last_error,
+            updated_at = now()
+          `,
+          [placementId, a.provider, a.error || null]
+        );
+
+        // если достигли лимита — выключаем до конца дня
+        await pool.query(
+          `
+          UPDATE mediation_provider_state
+          SET exhausted_until = CASE
+            WHEN nofill_streak >= $3 THEN (date_trunc('day', now()) + interval '1 day')
+            ELSE exhausted_until
+          END,
+          updated_at = now()
+          WHERE placement_id = $1 AND network = $2
+          `,
+          [placementId, a.provider, NOFILL_LIMIT]
+        );
+      } else {
+        // error: фиксируем, streak не трогаем
+        await pool.query(
+          `
+          INSERT INTO mediation_provider_state
+            (placement_id, network, nofill_streak, last_result, last_error, updated_at)
+          VALUES ($1, $2, 0, 'error', $3, now())
+          ON CONFLICT (placement_id, network)
+          DO UPDATE SET
+            last_result = 'error',
+            last_error = EXCLUDED.last_error,
+            updated_at = now()
+          `,
+          [placementId, a.provider, a.error || null]
+        );
+      }
     }
 
     // 2) если был fill — обновляем impressions.served_provider + served_at
@@ -314,11 +396,18 @@ export async function impression(req, res) {
         [orderId]
       );
 
-      if (!left.rowCount) return fail(res, "Order not active or no impressions left", 400);
+      if (!left.rowCount)
+        return fail(res, "Order not active or no impressions left", 400);
 
       if (left.rows[0].impressions_left <= 0) {
-        await pool.query(`UPDATE creative_orders SET status = 'completed' WHERE id = $1::uuid`, [orderId]);
-        await pool.query(`UPDATE creatives SET status = 'frozen' WHERE id = $1::uuid`, [left.rows[0].creative_id]);
+        await pool.query(
+          `UPDATE creative_orders SET status = 'completed' WHERE id = $1::uuid`,
+          [orderId]
+        );
+        await pool.query(
+          `UPDATE creatives SET status = 'frozen' WHERE id = $1::uuid`,
+          [left.rows[0].creative_id]
+        );
         await pool.query(
           `
           UPDATE ads
