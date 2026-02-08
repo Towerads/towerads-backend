@@ -2,14 +2,17 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# копируем package.json именно из app
-COPY app/package.json app/package-lock.json* ./
+# 1. Копируем зависимости из КОРНЯ
+COPY package.json package-lock.json* ./
 
-RUN npm install --omit=dev
+# 2. Устанавливаем зависимости
+RUN npm ci --omit=dev
 
-# копируем код приложения
-COPY app/ .
+# 3. Копируем весь проект
+COPY . .
 
+# 4. Render сам пробрасывает PORT
 EXPOSE 3000
 
-CMD ["node", "index.js"]
+# 5. Запуск через npm start
+CMD ["npm", "start"]
