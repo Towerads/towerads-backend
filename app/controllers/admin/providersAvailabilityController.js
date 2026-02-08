@@ -1,22 +1,11 @@
 import { pool } from "../../config/db.js";
 
-/**
- * Преобразуем период из query в SQL interval
- * today  -> 1 day
- * 7d     -> 7 days
- * 30d    -> 30 days
- */
 function intervalByPeriod(period) {
   if (period === "7d") return "7 days";
   if (period === "30d") return "30 days";
   return "1 day";
 }
 
-/**
- * GET /admin/providers/availability
- * Возвращает состояние доступности рекламных провайдеров
- * на основе impression_attempts
- */
 export async function adminProvidersAvailability(req, res) {
   try {
     const { period = "today" } = req.query;
@@ -62,3 +51,4 @@ export async function adminProvidersAvailability(req, res) {
     });
   }
 }
+

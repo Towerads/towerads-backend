@@ -1,5 +1,4 @@
-﻿
-import bcrypt from "bcryptjs";
+﻿import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { pool } from "../../config/db.js";
 
@@ -25,7 +24,6 @@ export async function adminLogin(req, res) {
     }
 
     const admin = r.rows[0];
-
     if (admin.status !== "active") {
       return res.status(403).json({ error: "Admin disabled" });
     }
@@ -36,7 +34,10 @@ export async function adminLogin(req, res) {
     }
 
     const token = jwt.sign(
-      { id: admin.id, role: admin.role },
+      {
+        id: admin.id,
+        role: admin.role,
+      },
       process.env.ADMIN_JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -46,12 +47,9 @@ export async function adminLogin(req, res) {
       [admin.id]
     );
 
-    return res.json({
-      success: true,
-      token,
-    });
+    res.json({ success: true, token });
   } catch (err) {
     console.error("❌ admin login error:", err);
-    return res.status(500).json({ error: "Server error" });
+    res.status(500).json({ error: "Server error" });
   }
 }

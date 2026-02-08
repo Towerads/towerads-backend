@@ -1,7 +1,7 @@
 import jwt from "jsonwebtoken";
 
 export function requireAdmin(req, res, next) {
-  // 🔥 ВАЖНО: пропускаем preflight
+  // пропускаем preflight
   if (req.method === "OPTIONS") {
     return next();
   }
@@ -22,3 +22,4 @@ export function requireAdmin(req, res, next) {
     return res.status(401).json({ error: "Invalid token" });
   }
 }
+
