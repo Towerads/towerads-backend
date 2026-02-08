@@ -1,22 +1,33 @@
 import { Router } from "express";
 
-import {
-  requestAd,
-  providerResultBatch,
-  impression,
-  complete,
-  click,
-  stats,
-} from "../controllers/api/towerAdsController.js";
+import * as tower from "../controllers/api/towerAdsController.js";
+
+console.log("TOWER EXPORTS:", Object.keys(tower));
+
+const requestAd = tower.requestAd;
+const providerResultBatch = tower.providerResultBatch;
+const impression = tower.impression;
+const complete = tower.complete;
+const click = tower.click; // <- если нет, увидим в логах
+const stats = tower.stats;
+
+const mustBeFn = (name, fn) => {
+  if (typeof fn !== "function") {
+    throw new Error(`towerAdsController.js missing export: ${name}`);
+  }
+};
+
+mustBeFn("requestAd", requestAd);
+mustBeFn("providerResultBatch", providerResultBatch);
+mustBeFn("impression", impression);
+mustBeFn("complete", complete);
+mustBeFn("click", click);
+mustBeFn("stats", stats);
 
 const router = Router();
 
-// HEALTH CHECK
-router.get("/healthz", (req, res) => {
-  res.status(200).json({ ok: true });
-});
+router.get("/healthz", (req, res) => res.status(200).json({ ok: true }));
 
-// TOWER ADS API
 router.post("/api/tower-ads/request", requestAd);
 router.post("/api/tower-ads/provider-result-batch", providerResultBatch);
 router.post("/api/tower-ads/impression", impression);
