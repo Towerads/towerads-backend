@@ -1,4 +1,4 @@
-export default function requireTelegramUser(req, res, next) {
+export function requireTelegramUser(req, res, next) {
   const tgUserId = req.header("X-TG-USER-ID");
 
   if (!tgUserId) {
