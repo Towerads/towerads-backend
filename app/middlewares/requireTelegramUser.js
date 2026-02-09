@@ -1,4 +1,4 @@
-export function requireTelegramUser(req, res, next) {
+export default function requireTelegramUser(req, res, next) {
   const tgUserId = req.header("X-TG-USER-ID");
 
   if (!tgUserId) {
@@ -7,8 +7,7 @@ export function requireTelegramUser(req, res, next) {
     });
   }
 
-  // всегда храним как строку
   req.tgUserId = String(tgUserId);
-
   return next();
 }
+
