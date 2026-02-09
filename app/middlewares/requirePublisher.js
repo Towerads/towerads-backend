@@ -1,11 +1,5 @@
-import db from "../config/db.js";
+import { pool } from "../config/db.js";
 
-/**
- * Требует, чтобы req.tgUserId был установлен requireTelegramUser.js
- * Маппинг:
- *  api_keys.user_id (tg id) -> api_keys.api_key
- *  placements.api_key -> placements.publisher_id
- */
 export default async function requirePublisher(req, res, next) {
   try {
     const tgUserId = req.tgUserId;
@@ -13,11 +7,11 @@ export default async function requirePublisher(req, res, next) {
       return res.status(401).json({ error: "Telegram user required" });
     }
 
-    // 1) найдём api_key по tgUserId
-    const keyRes = await db.query(
+    // 1) api_key по Telegram user id
+    const keyRes = await pool.query(
       `SELECT api_key
        FROM api_keys
-       WHERE user_id=$1 AND status='active'
+       WHERE user_id = $1 AND status = 'active'
        LIMIT 1`,
       [String(tgUserId)]
     );
@@ -28,11 +22,11 @@ export default async function requirePublisher(req, res, next) {
 
     const apiKey = keyRes.rows[0].api_key;
 
-    // 2) найдём publisher_id по api_key
-    const pubRes = await db.query(
+    // 2) publisher_id по api_key
+    const pubRes = await pool.query(
       `SELECT publisher_id
        FROM placements
-       WHERE api_key=$1 AND publisher_id IS NOT NULL
+       WHERE api_key = $1 AND publisher_id IS NOT NULL
        LIMIT 1`,
       [apiKey]
     );
@@ -47,7 +41,7 @@ export default async function requirePublisher(req, res, next) {
     };
 
     return next();
-  } catch (e) {
-    return next(e);
+  } catch (err) {
+    return next(err);
   }
 }

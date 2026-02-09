@@ -1,31 +1,31 @@
 // towerads-backend/app/controllers/publisher/publisherController.js
-const db = require("../../config/db");
+import { pool } from "../../config/db.js";
 
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
-exports.getSummary = async (req, res, next) => {
+export async function getSummary(req, res, next) {
   try {
     const publisherId = req.publisher.publisherId;
 
     // гарантируем строку баланса
-    await db.query(
+    await pool.query(
       `INSERT INTO publisher_balances (publisher_id)
        VALUES ($1)
        ON CONFLICT (publisher_id) DO NOTHING`,
       [publisherId]
     );
 
-    const bal = await db.query(
+    const bal = await pool.query(
       `SELECT frozen_usd, available_usd, locked_usd, updated_at
        FROM publisher_balances
        WHERE publisher_id=$1`,
       [publisherId]
     );
 
-    const impsRes = await db.query(
+    const impsRes = await pool.query(
       `
       SELECT COUNT(*)::int AS impressions_30d
       FROM impressions i
@@ -39,7 +39,7 @@ exports.getSummary = async (req, res, next) => {
       [publisherId]
     );
 
-    const cpmRes = await db.query(
+    const cpmRes = await pool.query(
       `
       SELECT
         CASE WHEN COALESCE(SUM((meta->>'impressions')::int),0) > 0
@@ -68,15 +68,15 @@ exports.getSummary = async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-};
+}
 
-exports.getDaily = async (req, res, next) => {
+export async function getDaily(req, res, next) {
   try {
     const publisherId = req.publisher.publisherId;
     const daysRaw = parseInt(req.query.days || "30", 10);
     const days = Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
 
-    const r = await db.query(
+    const r = await pool.query(
       `
       SELECT
         (meta->>'day') AS day,
@@ -100,4 +100,4 @@ exports.getDaily = async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-};
+}
