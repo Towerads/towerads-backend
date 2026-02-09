@@ -5,7 +5,7 @@ export function corsMiddleware(req, res, next) {
   res.header("Access-Control-Allow-Credentials", "true");
   res.header(
     "Access-Control-Allow-Headers",
-    "Content-Type, Authorization, X-TG-USER-ID"
+    "Content-Type, Authorization, X-TG-INIT-DATA, X-TG-USER-ID"
   );
   res.header(
     "Access-Control-Allow-Methods",
