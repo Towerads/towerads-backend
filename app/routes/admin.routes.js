@@ -41,6 +41,13 @@ import { adminPublishers } from "../controllers/admin/publishersController.js";
 // PROVIDERS AVAILABILITY
 import { adminProvidersAvailability } from "../controllers/admin/providersAvailabilityController.js";
 
+// PLACEMENTS MODERATION (NEW)
+import {
+  adminPlacements,
+  approvePlacement,
+  rejectPlacement,
+} from "../controllers/admin/placementsController.js";
+
 const router = Router();
 
 // ADMIN AUTH
@@ -80,4 +87,13 @@ router.get("/admin/providers/availability", requireAdmin, adminProvidersAvailabi
 // PUBLISHERS
 router.get("/admin/publishers", requireAdmin, adminPublishers);
 
+// PLACEMENTS (NEW)
+// список для модерации: ?status=pending|approved|rejected|all
+router.get("/admin/placements", requireAdmin, adminPlacements);
+// approve
+router.post("/admin/placements/:id/approve", requireAdmin, approvePlacement);
+// reject { reason }
+router.post("/admin/placements/:id/reject", requireAdmin, rejectPlacement);
+
 export default router;
+
