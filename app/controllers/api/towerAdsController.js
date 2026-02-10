@@ -119,6 +119,7 @@ async function pickActiveOrderForCreative(creative_id) {
 // --------------------
 // MEDIATION
 // --------------------
+
 async function decideProviders(placement_id) {
   const r = await pool.query(
     `
@@ -140,37 +141,15 @@ async function decideProviders(placement_id) {
 
   const providers = r.rows.map((x) => x.network);
 
-  const state = await pool.query(
-    `
-    SELECT last_network
-    FROM mediation_state
-    WHERE placement_id = $1
-    `,
-    [placement_id]
-  );
-
-  let start = 0;
-  if (state.rowCount && state.rows[0].last_network) {
-    const idx = providers.indexOf(state.rows[0].last_network);
-    start = idx >= 0 ? (idx + 1) % providers.length : 0;
+  // ✅ USL ВСЕГДА ПЕРВЫМ
+  if (providers.includes("usl")) {
+    return ["usl", ...providers.filter((p) => p !== "usl")];
   }
 
-  const ordered = [...providers.slice(start), ...providers.slice(0, start)];
-
-  await pool.query(
-    `
-    INSERT INTO mediation_state (placement_id, last_network, last_shown_at)
-    VALUES ($1, $2, now())
-    ON CONFLICT (placement_id)
-    DO UPDATE SET
-      last_network = EXCLUDED.last_network,
-      last_shown_at = now()
-    `,
-    [placement_id, ordered[0]]
-  );
-
-  return ordered;
+  return providers;
 }
+
+  
 
 // --------------------
 // API ENDPOINTS
@@ -261,6 +240,10 @@ export async function requestAd(req, res) {
 
       // order_id нужен твоей USL-логике в /impression (списание показов)
       const order = await pickActiveOrderForCreative(ad.creative_id);
+
+      if (!order) {
+        return ok(res, { providers, impression_id });
+      }
 
       // фиксируем usl как winner, сохраняем ad/creative/order
       await pool.query(
