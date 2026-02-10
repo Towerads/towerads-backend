@@ -75,12 +75,19 @@ function getClientIp(req, user_data) {
 async function pickUslAd(placement_id) {
   const r = await pool.query(
     `
-    SELECT id, ad_type, media_url, click_url, duration, creative_id
-    FROM ads
-    WHERE placement_id = $1
-      AND status = 'active'
-      AND source = 'usl'
-    ORDER BY last_shown_at NULLS FIRST, created_at DESC
+    SELECT
+      a.id,
+      a.ad_type,
+      COALESCE(c.media_url, a.media_url) AS media_url,
+      COALESCE(c.click_url, a.click_url) AS click_url,
+      COALESCE(c.duration, a.duration)   AS duration,
+      a.creative_id
+    FROM ads a
+    LEFT JOIN creatives c ON c.id = a.creative_id
+    WHERE a.placement_id = $1
+      AND a.status = 'active'
+      AND a.source = 'usl'
+    ORDER BY a.last_shown_at NULLS FIRST, a.created_at DESC
     LIMIT 1
     `,
     [placement_id]
