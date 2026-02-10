@@ -33,7 +33,7 @@ function pickOr501(mod, names) {
 router.post("/admin/auth/login", adminLogin);
 
 // ===================
-// ORDERS (по твоему логу exports точно такие)
+// ORDERS
 // exports: createCreativeOrder, listOrders, orderDetail, pauseOrder, resumeOrder, stopOrder
 // ===================
 router.get("/admin/orders", pickOr501(orders, ["listOrders"]));
@@ -45,7 +45,7 @@ router.post("/admin/orders/:id/resume", pickOr501(orders, ["resumeOrder"]));
 router.post("/admin/orders/:id/stop", pickOr501(orders, ["stopOrder"]));
 
 // ===================
-// CREATIVES (по твоему логу)
+// CREATIVES
 // Available exports: approveCreative, listCreativesAdmin, pendingCreatives, rejectCreative
 // ===================
 router.get("/admin/creatives", (req, res, next) => {
@@ -56,40 +56,40 @@ router.get("/admin/creatives", (req, res, next) => {
   return pickOr501(creatives, ["listCreativesAdmin"])(req, res, next);
 });
 
-router.post(
-  "/admin/creatives/:id/approve",
-  pickOr501(creatives, ["approveCreative"])
-);
-
-router.post(
-  "/admin/creatives/:id/reject",
-  pickOr501(creatives, ["rejectCreative"])
-);
+router.post("/admin/creatives/:id/approve", pickOr501(creatives, ["approveCreative"]));
+router.post("/admin/creatives/:id/reject", pickOr501(creatives, ["rejectCreative"]));
 
 // ===================
 // MEDIATION
-// (если имена не совпадут — будет 501, но сервер не упадёт)
+// Available exports: adminMediationList, adminMediationToggle, adminMediationTraffic
 // ===================
-router.get("/admin/mediation", pickOr501(mediation, ["getMediation", "getConfig"]));
-router.post("/admin/mediation", pickOr501(mediation, ["saveMediation", "saveConfig"]));
+router.get("/admin/mediation", pickOr501(mediation, ["adminMediationList"]));
+
+// Эти два пути могут отличаться от того, что зовёт фронт.
+// Но они добавлены, чтобы у тебя были endpoints под toggle/traffic.
+router.post("/admin/mediation/toggle", pickOr501(mediation, ["adminMediationToggle"]));
+router.post("/admin/mediation/traffic", pickOr501(mediation, ["adminMediationTraffic"]));
 
 // ===================
 // PROVIDERS
+// (если будет 501 — в ответе увидишь available exports и подставим точные имена)
 // ===================
 router.get("/admin/providers", pickOr501(providersAvail, ["getProviders", "listProviders"]));
 router.post("/admin/providers", pickOr501(providersAvail, ["saveProviders", "updateProviders"]));
 
 // ===================
 // PUBLISHERS
+// Available exports: adminPublishers
 // ===================
-router.get("/admin/publishers", pickOr501(publishers, ["getPublishers", "listPublishers"]));
+router.get("/admin/publishers", pickOr501(publishers, ["adminPublishers"]));
 
 // ===================
-// STATS (эти точно есть у тебя)
+// STATS
 // ===================
 router.get("/admin/stats", stats.adminStats);
 router.get("/admin/stats/providers", stats.adminStatsProviders);
 
 export default router;
 export { router };
+
 
