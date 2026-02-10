@@ -37,6 +37,24 @@ async function requireActivePlacement(api_key, placement_id) {
   return { ok: true, placement: r.rows[0] };
 }
 
+async function findPlacementByPublicKey(public_key) {
+  const r = await pool.query(
+    `
+    SELECT id, api_key, ad_type, status
+    FROM placements
+    WHERE public_key = $1
+    `,
+    [public_key]
+  );
+
+  if (r.rowCount === 0)
+    return { ok: false, error: "Invalid placement_public_key" };
+  if (r.rows[0].status !== "active")
+    return { ok: false, error: "placement paused" };
+
+  return { ok: true, placement: r.rows[0] };
+}
+
 // --------------------
 // MEDIATION
 // --------------------
@@ -98,20 +116,38 @@ async function decideProviders(placement_id) {
 // --------------------
 export async function requestAd(req, res) {
   try {
-    const { api_key, placement_id, user_data } = req.body || {};
+    const { api_key, placement_id, placement_public_key, user_data } =
+      req.body || {};
 
-    if (!api_key || !placement_id) {
-      return fail(res, "Missing api_key or placement_id", 400);
+    // режим 1: public_key (универсальный SDK)
+    let resolvedApiKey = api_key;
+    let resolvedPlacementId = placement_id;
+
+    if (placement_public_key) {
+      const pp = await findPlacementByPublicKey(placement_public_key);
+      if (!pp.ok) return fail(res, pp.error, 400);
+
+      resolvedApiKey = pp.placement.api_key;
+      resolvedPlacementId = pp.placement.id;
     }
 
-    const k = await requireActiveApiKey(api_key);
+    // режим 2: старый api_key + placement_id (совместимость)
+    if (!resolvedApiKey || !resolvedPlacementId) {
+      return fail(
+        res,
+        "Missing api_key/placement_id or placement_public_key",
+        400
+      );
+    }
+
+    const k = await requireActiveApiKey(resolvedApiKey);
     if (!k.ok) return fail(res, k.error, 401);
 
-    const p = await requireActivePlacement(api_key, placement_id);
+    const p = await requireActivePlacement(resolvedApiKey, resolvedPlacementId);
     if (!p.ok) return fail(res, p.error, 400);
 
     // 1️⃣ WATERFALL провайдеров
-    const providers = await decideProviders(placement_id);
+    const providers = await decideProviders(resolvedPlacementId);
     const impression_id = "imp_" + uuidv4().replace(/-/g, "");
 
     // 🛡️ АНТИФРОД: защита от спама по session_id
@@ -130,16 +166,16 @@ export async function requestAd(req, res) {
       }
     }
 
-    // 2️⃣ создаём impression (пока НЕ знаем кто реально покажет)
+    // 2️⃣ создаём impression (единый портал => source='tower')
     await pool.query(
       `
       INSERT INTO impressions
       (id, placement_id, status, source, network, providers, user_ip, device, os, session_id, user_agent, referer, captcha_verified)
-      VALUES ($1, $2, 'requested', 'external', NULL, $3, $4, $5, $6, $7, $8, $9, $10)
+      VALUES ($1, $2, 'requested', 'tower', NULL, $3, $4, $5, $6, $7, $8, $9, $10)
       `,
       [
         impression_id,
-        placement_id,
+        resolvedPlacementId,
         JSON.stringify(providers),
         user_data?.ip || null,
         user_data?.device || null,
@@ -151,7 +187,6 @@ export async function requestAd(req, res) {
       ]
     );
 
-    // ✅ отвечаем waterfall
     return ok(res, { providers, impression_id });
   } catch (err) {
     console.error("❌ /request error:", err);
@@ -175,23 +210,17 @@ export async function providerResultBatch(req, res) {
 
     const placementId = imp.rows[0].placement_id;
 
-    // ✅ после 3 nofill подряд считаем “закончилась до конца дня”
     const NOFILL_LIMIT = 3;
 
-    // 1) сохраняем все попытки (для аналитики) + обновляем provider_state
+    // 1) сохраняем все попытки + обновляем provider_state
     for (const a of attempts) {
       if (!a?.provider) continue;
 
       let result = (a.status || "error").toLowerCase();
-      if (
-        result === "no_fill" ||
-        result === "no-fill" ||
-        result === "nofill"
-      )
+      if (result === "no_fill" || result === "no-fill" || result === "nofill")
         result = "nofill";
       if (!["filled", "nofill", "error"].includes(result)) result = "error";
 
-      // 1.1) attempts лог
       await pool.query(
         `
         INSERT INTO impression_attempts
@@ -202,7 +231,6 @@ export async function providerResultBatch(req, res) {
         [impression_id, a.provider, result, a.error || null]
       );
 
-      // 1.2) provider_state
       if (result === "filled") {
         await pool.query(
           `
@@ -220,7 +248,6 @@ export async function providerResultBatch(req, res) {
           [placementId, a.provider]
         );
       } else if (result === "nofill") {
-        // увеличиваем streak
         await pool.query(
           `
           INSERT INTO mediation_provider_state
@@ -236,7 +263,6 @@ export async function providerResultBatch(req, res) {
           [placementId, a.provider, a.error || null]
         );
 
-        // если достигли лимита — выключаем до конца дня
         await pool.query(
           `
           UPDATE mediation_provider_state
@@ -250,7 +276,6 @@ export async function providerResultBatch(req, res) {
           [placementId, a.provider, NOFILL_LIMIT]
         );
       } else {
-        // error: фиксируем, streak не трогаем
         await pool.query(
           `
           INSERT INTO mediation_provider_state
@@ -267,7 +292,7 @@ export async function providerResultBatch(req, res) {
       }
     }
 
-    // 2) если был fill — обновляем impressions.served_provider + served_at
+    // 2) если был fill — фиксируем winner
     if (served_provider) {
       const allowed = attempts.map((a) => a.provider).filter(Boolean);
 
@@ -279,7 +304,8 @@ export async function providerResultBatch(req, res) {
         `
         UPDATE impressions
         SET served_provider = $1,
-            served_at = now()
+            served_at = now(),
+            network = $1
         WHERE id = $2
           AND status = 'requested'
         `,
@@ -299,7 +325,6 @@ export async function impression(req, res) {
     const { impression_id } = req.body || {};
     if (!impression_id) return fail(res, "Missing impression_id", 400);
 
-    // 🛡️ АНТИФРОД ПРОВЕРКА
     const fraudCheck = await pool.query(
       `
       SELECT is_fraud, captcha_verified
@@ -310,19 +335,12 @@ export async function impression(req, res) {
       [impression_id]
     );
 
-    if (!fraudCheck.rowCount) {
-      return fail(res, "Invalid impression", 400);
-    }
-
-    if (fraudCheck.rows[0].is_fraud) {
-      return fail(res, "Fraud impression", 403);
-    }
-
-    if (!fraudCheck.rows[0].captcha_verified) {
+    if (!fraudCheck.rowCount) return fail(res, "Invalid impression", 400);
+    if (fraudCheck.rows[0].is_fraud) return fail(res, "Fraud impression", 403);
+    if (!fraudCheck.rows[0].captcha_verified)
       return fail(res, "Captcha not verified", 403);
-    }
 
-    // 🔁 external — просто фиксируем impression
+    // external (если у тебя есть старый поток) — оставить как совместимость
     const src = await pool.query(
       `SELECT source, served_provider FROM impressions WHERE id = $1`,
       [impression_id]
@@ -369,7 +387,6 @@ export async function impression(req, res) {
     if (meta.rows[0].source === "usl") {
       const orderId = meta.rows[0].order_id;
       const pricePerImp = Number(meta.rows[0].price_per_impression || 0);
-
       if (!orderId) return fail(res, "Missing order_id for usl", 400);
 
       await pool.query(
@@ -521,12 +538,15 @@ export async function stats(req, res) {
       `
       SELECT
         COUNT(*) FILTER (WHERE status = 'requested') AS requests,
-        COUNT(*) FILTER (WHERE status = 'impression') AS impressions,
+        COUNT(*) FILTER (
+          WHERE status IN ('impression','completed','clicked')
+        ) AS impressions,
         COUNT(*) FILTER (WHERE status = 'clicked') AS clicks,
         SUM(revenue_usd) AS revenue,
         SUM(cost_usd) AS cost
       FROM impressions
       WHERE placement_id = $1
+        AND source = 'tower'
       `,
       [placement_id]
     );

@@ -1,13 +1,16 @@
 import { pool } from "../../config/db.js";
 
+// --------------------
+// TOTAL STATS
+// --------------------
 export async function adminStats(req, res) {
   try {
     const r = await pool.query(`
       SELECT
-        COUNT(*) FILTER (WHERE status = 'requested') AS requests,
+        COUNT(*) FILTER (WHERE status = 'requested')  AS requests,
         COUNT(*) FILTER (WHERE status = 'impression') AS impressions,
-        COUNT(*) FILTER (WHERE status = 'clicked') AS clicks,
-        COALESCE(SUM(revenue_usd), 0) AS revenue
+        COUNT(*) FILTER (WHERE status = 'clicked')    AS clicks,
+        COALESCE(SUM(revenue_usd), 0)                 AS revenue
       FROM impressions
     `);
 
@@ -25,6 +28,11 @@ export async function adminStats(req, res) {
   }
 }
 
+// --------------------
+// PROVIDERS STATS (ПО ТЗ)
+// attempts = из impression_attempts
+// revenue/cost = из impressions по served_provider (чтобы не умножалось на attempts)
+// --------------------
 export async function adminStatsProviders(req, res) {
   try {
     const { period = "today", from, to } = req.query;
@@ -35,42 +43,60 @@ export async function adminStatsProviders(req, res) {
     if (from && to) {
       params.push(from, to);
       whereSql = `
-        i.created_at >= $1::date
-        AND i.created_at < ($2::date + interval '1 day')
+        ia.created_at >= $1::date
+        AND ia.created_at < ($2::date + interval '1 day')
       `;
     } else {
       let interval = "1 day";
       if (period === "7d") interval = "7 days";
       if (period === "30d") interval = "30 days";
-
-      whereSql = `i.created_at >= now() - interval '${interval}'`;
+      whereSql = `ia.created_at >= now() - interval '${interval}'`;
     }
 
     const r = await pool.query(
       `
+      WITH attempts AS (
+        SELECT
+          ia.provider,
+          COUNT(*) FILTER (WHERE ia.result = 'filled')::int AS filled,
+          COUNT(*) FILTER (WHERE ia.result = 'nofill')::int AS nofill,
+          COUNT(*) FILTER (WHERE ia.result = 'error')::int  AS error
+        FROM impression_attempts ia
+        WHERE ${whereSql}
+        GROUP BY ia.provider
+      ),
+      wins AS (
+        SELECT
+          i.served_provider AS provider,
+          COUNT(*)::int AS impressions,
+          COALESCE(SUM(i.revenue_usd), 0)::numeric(12,6) AS revenue,
+          COALESCE(SUM(i.cost_usd), 0)::numeric(12,6)    AS cost,
+          (COALESCE(SUM(i.revenue_usd), 0) - COALESCE(SUM(i.cost_usd), 0))::numeric(12,6) AS profit
+        FROM impressions i
+        WHERE i.served_provider IS NOT NULL
+          AND i.status IN ('impression','completed','clicked')
+          AND i.source = 'tower'
+        GROUP BY i.served_provider
+      )
       SELECT
-        m.network AS provider,
+        a.provider,
+        a.filled,
+        a.nofill,
+        a.error,
 
-        COUNT(i.id)::int AS impressions,
-
-        COALESCE(SUM(i.revenue_usd), 0)::numeric(12,6) AS revenue,
-        COALESCE(SUM(i.cost_usd), 0)::numeric(12,6)    AS cost,
-        (COALESCE(SUM(i.revenue_usd), 0) - COALESCE(SUM(i.cost_usd), 0))::numeric(12,6) AS profit,
+        COALESCE(w.impressions, 0)::int AS impressions,
+        COALESCE(w.revenue, 0)::numeric(12,6) AS revenue,
+        COALESCE(w.cost, 0)::numeric(12,6)    AS cost,
+        COALESCE(w.profit, 0)::numeric(12,6)  AS profit,
 
         CASE
-          WHEN COUNT(i.id) = 0 THEN 0
-          ELSE (COALESCE(SUM(i.revenue_usd), 0) / COUNT(i.id)) * 1000
+          WHEN COALESCE(w.impressions, 0) = 0 THEN 0
+          ELSE (COALESCE(w.revenue, 0) / COALESCE(w.impressions, 0)) * 1000
         END::numeric(12,2) AS cpm
 
-      FROM impressions i
-      JOIN ads a ON a.id = i.ad_id
-      JOIN mediation_config m ON m.placement_id = i.placement_id
-
-      WHERE ${whereSql}
-        AND i.status = 'impression'
-
-      GROUP BY m.network
-      ORDER BY m.network
+      FROM attempts a
+      LEFT JOIN wins w ON w.provider = a.provider
+      ORDER BY a.provider
       `,
       params
     );
@@ -81,4 +107,3 @@ export async function adminStatsProviders(req, res) {
     res.status(500).json({ error: "stats error" });
   }
 }
-
