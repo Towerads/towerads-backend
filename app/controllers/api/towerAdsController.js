@@ -452,7 +452,6 @@ export async function impression(req, res) {
           cost_usd = $2
       WHERE id = $3
         AND status = 'requested'
-      RETURNING campaign_id
       `,
       [revenue, cost, impression_id]
     );
