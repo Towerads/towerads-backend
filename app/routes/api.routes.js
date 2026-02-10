@@ -20,6 +20,10 @@ router.post("/api/tower-ads/provider-result-batch", tower.providerResultBatch);
 router.post("/api/tower-ads/impression", tower.impression);
 router.post("/api/tower-ads/complete", tower.complete);
 router.post("/api/tower-ads/click", tower.click);
+
+// ✅ НОВОЕ: click-redirect (нужно для USL, чтобы трекать клики через редирект)
+router.get("/api/tower-ads/click-redirect", tower.clickRedirect);
+
 router.get("/api/tower-ads/stats", tower.stats);
 
 /**

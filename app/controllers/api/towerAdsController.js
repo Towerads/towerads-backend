@@ -55,6 +55,67 @@ async function findPlacementByPublicKey(public_key) {
   return { ok: true, placement: r.rows[0] };
 }
 
+function getClientIp(req, user_data) {
+  // 1) user_data.ip от SDK (если передают)
+  if (user_data?.ip) return user_data.ip;
+
+  // 2) Cloudflare (у тебя в логах есть)
+  const cf = req.headers["cf-connecting-ip"];
+  if (typeof cf === "string" && cf.trim()) return cf.trim();
+
+  // 3) X-Forwarded-For (берём первый)
+  const xff = req.headers["x-forwarded-for"];
+  if (typeof xff === "string" && xff.trim()) {
+    return xff.split(",")[0].trim();
+  }
+
+  return null;
+}
+
+async function pickUslAd(placement_id) {
+  const r = await pool.query(
+    `
+    SELECT id, ad_type, media_url, click_url, duration, creative_id
+    FROM ads
+    WHERE placement_id = $1
+      AND status = 'active'
+      AND source = 'usl'
+    ORDER BY last_shown_at NULLS FIRST, created_at DESC
+    LIMIT 1
+    `,
+    [placement_id]
+  );
+
+  if (!r.rowCount) return null;
+
+  // отметим показ для ротации
+  await pool.query(`UPDATE ads SET last_shown_at = now() WHERE id = $1`, [
+    r.rows[0].id,
+  ]);
+
+  return r.rows[0];
+}
+
+async function pickActiveOrderForCreative(creative_id) {
+  if (!creative_id) return null;
+
+  const r = await pool.query(
+    `
+    SELECT id, price_per_impression
+    FROM creative_orders
+    WHERE creative_id = $1::uuid
+      AND status = 'active'
+      AND impressions_left > 0
+    ORDER BY created_at ASC
+    LIMIT 1
+    `,
+    [creative_id]
+  );
+
+  if (!r.rowCount) return null;
+  return r.rows[0];
+}
+
 // --------------------
 // MEDIATION
 // --------------------
@@ -166,6 +227,8 @@ export async function requestAd(req, res) {
       }
     }
 
+    const userIp = getClientIp(req, user_data);
+
     // 2️⃣ создаём impression (единый портал => source='tower')
     await pool.query(
       `
@@ -177,7 +240,7 @@ export async function requestAd(req, res) {
         impression_id,
         resolvedPlacementId,
         JSON.stringify(providers),
-        user_data?.ip || null,
+        userIp,
         user_data?.device || null,
         user_data?.os || null,
         user_data?.session_id || null,
@@ -187,6 +250,69 @@ export async function requestAd(req, res) {
       ]
     );
 
+    // ✅ USL: если первый провайдер usl — отдаём креатив сразу
+    const primary = providers[0];
+
+    if (primary === "usl") {
+      const ad = await pickUslAd(resolvedPlacementId);
+
+      // если USL пуст — пусть SDK идёт дальше по waterfall
+      if (!ad) return ok(res, { providers, impression_id });
+
+      // order_id нужен твоей USL-логике в /impression (списание показов)
+      const order = await pickActiveOrderForCreative(ad.creative_id);
+
+      // фиксируем usl как winner, сохраняем ad/creative/order
+      await pool.query(
+        `
+        UPDATE impressions
+        SET ad_id = $1,
+            creative_id = $2,
+            order_id = $3,
+            served_provider = 'usl',
+            served_at = now(),
+            network = 'usl',
+            source = 'tower'
+        WHERE id = $4
+          AND status = 'requested'
+        `,
+        [ad.id, ad.creative_id || null, order?.id || null, impression_id]
+      );
+
+      // отмечаем попытку usl=filled (для аналитики)
+      await pool.query(
+        `
+        INSERT INTO impression_attempts (impression_id, provider, result, error)
+        VALUES ($1, 'usl', 'filled', NULL)
+        `,
+        [impression_id]
+      );
+
+      // click_url для фронта: редирект через наш трекер
+      // (этот endpoint ниже в этом файле)
+      const trackingClickUrl = `${req.protocol}://${req.get(
+        "host"
+      )}/api/tower-ads/click-redirect?impression_id=${encodeURIComponent(
+        impression_id
+      )}`;
+
+      return ok(res, {
+        providers,
+        impression_id,
+        provider: "usl",
+        ad: {
+          ad_id: ad.id,
+          creative_id: ad.creative_id || null,
+          type: ad.ad_type,
+          media_url: ad.media_url,
+          duration: ad.duration,
+          target_url: ad.click_url,
+          click_url: trackingClickUrl,
+        },
+      });
+    }
+
+    // по умолчанию (внешние сети) — как было
     return ok(res, { providers, impression_id });
   } catch (err) {
     console.error("❌ /request error:", err);
@@ -368,6 +494,7 @@ export async function impression(req, res) {
       `
       SELECT
         i.source,
+        i.network,
         i.order_id,
         co.price_per_impression,
         a.campaign_id,
@@ -384,10 +511,17 @@ export async function impression(req, res) {
 
     if (!meta.rowCount) return fail(res, "Invalid impression state", 400);
 
-    if (meta.rows[0].source === "usl") {
+    // ✅ USL определяется по network, а не по source
+    if (meta.rows[0].network === "usl") {
       const orderId = meta.rows[0].order_id;
       const pricePerImp = Number(meta.rows[0].price_per_impression || 0);
-      if (!orderId) return fail(res, "Missing order_id for usl", 400);
+
+      if (!orderId)
+        return fail(
+          res,
+          "Missing order_id for usl (no active creative_order)",
+          400
+        );
 
       await pool.query(
         `
@@ -439,6 +573,7 @@ export async function impression(req, res) {
       return ok(res);
     }
 
+    // остальные сети: CPM
     const bid = Number(meta.rows[0].bid_cpm_usd || 0);
     const payout = Number(meta.rows[0].payout_cpm_usd || 0);
     const revenue = bid / 1000;
@@ -500,6 +635,7 @@ export async function complete(req, res) {
   }
 }
 
+// Старый POST клик — оставляем как есть (если фронт умеет)
 export async function click(req, res) {
   try {
     const { impression_id } = req.body || {};
@@ -519,6 +655,44 @@ export async function click(req, res) {
   } catch (err) {
     console.error("❌ /click error:", err);
     return fail(res, "Server error", 500);
+  }
+}
+
+// ✅ Новый GET click-redirect (фронту проще: просто открыть ссылку)
+export async function clickRedirect(req, res) {
+  try {
+    const impression_id = req.query?.impression_id;
+    if (!impression_id) return res.status(400).send("Missing impression_id");
+
+    // возьмём target_url из ads
+    const r = await pool.query(
+      `
+      SELECT a.click_url
+      FROM impressions i
+      LEFT JOIN ads a ON a.id = i.ad_id
+      WHERE i.id = $1
+      `,
+      [impression_id]
+    );
+
+    // фиксируем клик
+    await pool.query(
+      `
+      UPDATE impressions
+      SET status = 'clicked',
+          clicked_at = now()
+      WHERE id = $1
+      `,
+      [impression_id]
+    );
+
+    const target = r.rowCount ? r.rows[0].click_url : null;
+    if (!target) return res.status(404).send("No target url");
+
+    return res.redirect(302, target);
+  } catch (err) {
+    console.error("❌ /click-redirect error:", err);
+    return res.status(500).send("Server error");
   }
 }
 
