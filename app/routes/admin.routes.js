@@ -11,15 +11,20 @@ import * as stats from "../controllers/admin/statsController.js";
 
 const router = Router();
 
-// helper: выбирает существующий handler или падает с понятной ошибкой
-function pick(mod, names, routeLabel) {
+/**
+ * Не валит старт сервера.
+ * Если хендлера нет — вернёт 501 и покажет, какие экспорты доступны.
+ */
+function pickOr501(mod, names) {
   for (const n of names) {
     if (typeof mod?.[n] === "function") return mod[n];
   }
-  throw new Error(
-    `Missing handler for ${routeLabel}. Expected one of: ${names.join(", ")}. ` +
-    `Available exports: ${Object.keys(mod || {}).join(", ")}`
-  );
+  return (req, res) =>
+    res.status(501).json({
+      error: "Not implemented",
+      expected: names,
+      available: Object.keys(mod || {}),
+    });
 }
 
 // ===================
@@ -28,97 +33,63 @@ function pick(mod, names, routeLabel) {
 router.post("/admin/auth/login", adminLogin);
 
 // ===================
-// ORDERS
+// ORDERS (по твоему логу exports точно такие)
 // exports: createCreativeOrder, listOrders, orderDetail, pauseOrder, resumeOrder, stopOrder
 // ===================
-router.get(
-  "/admin/orders",
-  pick(orders, ["listOrders"], "GET /admin/orders")
-);
+router.get("/admin/orders", pickOr501(orders, ["listOrders"]));
+router.get("/admin/orders/:id", pickOr501(orders, ["orderDetail"]));
 
-router.get(
-  "/admin/orders/:id",
-  pick(orders, ["orderDetail"], "GET /admin/orders/:id")
-);
-
-router.post(
-  "/admin/orders",
-  pick(orders, ["createCreativeOrder"], "POST /admin/orders")
-);
-
-router.post(
-  "/admin/orders/:id/pause",
-  pick(orders, ["pauseOrder"], "POST /admin/orders/:id/pause")
-);
-
-router.post(
-  "/admin/orders/:id/resume",
-  pick(orders, ["resumeOrder"], "POST /admin/orders/:id/resume")
-);
-
-router.post(
-  "/admin/orders/:id/stop",
-  pick(orders, ["stopOrder"], "POST /admin/orders/:id/stop")
-);
+router.post("/admin/orders", pickOr501(orders, ["createCreativeOrder"]));
+router.post("/admin/orders/:id/pause", pickOr501(orders, ["pauseOrder"]));
+router.post("/admin/orders/:id/resume", pickOr501(orders, ["resumeOrder"]));
+router.post("/admin/orders/:id/stop", pickOr501(orders, ["stopOrder"]));
 
 // ===================
-// CREATIVES
-// (если имена другие — pick сам скажет какие есть)
+// CREATIVES (по твоему логу)
+// Available exports: approveCreative, listCreativesAdmin, pendingCreatives, rejectCreative
 // ===================
-router.get(
-  "/admin/creatives",
-  pick(creatives, ["listCreatives", "getCreatives"], "GET /admin/creatives")
-);
+router.get("/admin/creatives", (req, res, next) => {
+  const status = String(req.query?.status || "").toLowerCase();
+  if (status === "pending") {
+    return pickOr501(creatives, ["pendingCreatives"])(req, res, next);
+  }
+  return pickOr501(creatives, ["listCreativesAdmin"])(req, res, next);
+});
 
 router.post(
   "/admin/creatives/:id/approve",
-  pick(creatives, ["approveCreative", "approve"], "POST /admin/creatives/:id/approve")
+  pickOr501(creatives, ["approveCreative"])
 );
 
 router.post(
   "/admin/creatives/:id/reject",
-  pick(creatives, ["rejectCreative", "reject"], "POST /admin/creatives/:id/reject")
+  pickOr501(creatives, ["rejectCreative"])
 );
 
 // ===================
 // MEDIATION
+// (если имена не совпадут — будет 501, но сервер не упадёт)
 // ===================
-router.get(
-  "/admin/mediation",
-  pick(mediation, ["getMediation", "getConfig"], "GET /admin/mediation")
-);
-
-router.post(
-  "/admin/mediation",
-  pick(mediation, ["saveMediation", "saveConfig"], "POST /admin/mediation")
-);
+router.get("/admin/mediation", pickOr501(mediation, ["getMediation", "getConfig"]));
+router.post("/admin/mediation", pickOr501(mediation, ["saveMediation", "saveConfig"]));
 
 // ===================
 // PROVIDERS
 // ===================
-router.get(
-  "/admin/providers",
-  pick(providersAvail, ["getProviders", "listProviders"], "GET /admin/providers")
-);
-
-router.post(
-  "/admin/providers",
-  pick(providersAvail, ["saveProviders", "updateProviders"], "POST /admin/providers")
-);
+router.get("/admin/providers", pickOr501(providersAvail, ["getProviders", "listProviders"]));
+router.post("/admin/providers", pickOr501(providersAvail, ["saveProviders", "updateProviders"]));
 
 // ===================
 // PUBLISHERS
 // ===================
-router.get(
-  "/admin/publishers",
-  pick(publishers, ["getPublishers", "listPublishers"], "GET /admin/publishers")
-);
+router.get("/admin/publishers", pickOr501(publishers, ["getPublishers", "listPublishers"]));
 
 // ===================
-// STATS
+// STATS (эти точно есть у тебя)
 // ===================
 router.get("/admin/stats", stats.adminStats);
 router.get("/admin/stats/providers", stats.adminStatsProviders);
 
 export default router;
 export { router };
+
