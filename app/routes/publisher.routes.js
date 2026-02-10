@@ -4,6 +4,7 @@ import {
   publisherDaily,
   listPlacements,
   publisherProvidersStats,
+  getSdkScript,
 } from "../controllers/publisher/publisherController.js";
 
 import { requireTelegramUser } from "../middlewares/requireTelegramUser.js";
@@ -23,13 +24,16 @@ router.use(requirePublisher);
  * GET /publisher/summary
  * GET /publisher/daily
  * GET /publisher/placements
+ * GET /publisher/sdk-script
  */
 router.get("/summary", publisherSummary);
 router.get("/daily", publisherDaily);
 router.get("/placements", listPlacements);
 router.get("/providers/stats", publisherProvidersStats);
+router.get("/sdk-script", getSdkScript);
 
 export default router;
 export { router };
+
 
 

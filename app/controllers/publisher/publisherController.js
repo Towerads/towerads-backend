@@ -276,7 +276,7 @@ export async function getProvidersStats(req, res, next) {
     const days = isAll
       ? null
       : Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
-      
+
     // 1) Узнаем, есть ли колонка "provider" в impressions
     const col = await pool.query(
       `
@@ -336,6 +336,69 @@ export async function getProvidersStats(req, res, next) {
     next(e);
   }
 }
+
+export async function getSdkScript(req, res, next) {
+  try {
+    const publisherId = getPublisherId(req);
+    if (!publisherId) {
+      return res.status(401).json({ error: "Publisher not identified" });
+    }
+
+    // можно передавать placement_id, но если не передали — берём самый свежий
+    const placementId = String(req.query.placement_id || "").trim();
+
+    const r = await pool.query(
+      `
+      SELECT id, name, public_key, ad_type
+      FROM placements
+      WHERE publisher_id = $1
+        AND ($2 = '' OR id = $2)
+      ORDER BY created_at DESC
+      LIMIT 1
+      `,
+      [publisherId, placementId]
+    );
+
+    if (!r.rowCount) {
+      return res.status(404).json({ error: "No placements found" });
+    }
+
+    const p = r.rows[0];
+
+    // URL SDK берём из env, чтобы можно было менять без релиза
+    const sdkUrl =
+      process.env.TOWERADS_SDK_URL ||
+      "https://portal.yourdomain.com/sdk/tower-ads-v4.js";
+
+    const script = `<!-- TowerAds Unified SDK -->
+<script>
+  (function (w, d, s, u, pk) {
+    if (!pk) { console.error("TowerAds: placement public key missing"); return; }
+    w.TowerAds = w.TowerAds || { q: [] };
+    w.TowerAds.q.push({ type: "init", placementPublicKey: pk });
+
+    var js = d.createElement(s);
+    js.async = true;
+    js.src = u;
+
+    var first = d.getElementsByTagName(s)[0];
+    first.parentNode.insertBefore(js, first);
+  })(window, document, "script", "${sdkUrl}", "${p.public_key}");
+</script>`;
+
+    return res.json({
+      placement_id: p.id,
+      placement_name: p.name,
+      placement_public_key: p.public_key,
+      sdk_url: sdkUrl,
+      script,
+    });
+  } catch (e) {
+    next(e);
+  }
+}
+
+
 
 
 // =========================
