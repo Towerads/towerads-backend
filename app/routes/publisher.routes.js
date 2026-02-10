@@ -26,6 +26,7 @@ router.use(requirePublisher);
 router.get("/summary", publisherSummary);
 router.get("/daily", publisherDaily);
 router.get("/placements", listPlacements);
+router.get("/providers/stats", publisherProvidersStats);
 
 export default router;
 export { router };

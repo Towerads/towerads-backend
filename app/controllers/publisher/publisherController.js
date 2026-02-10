@@ -259,9 +259,89 @@ export async function submitPlacement(req, res, next) {
   }
 }
 
+
+// =========================
+// PROVIDERS STATS (TMA)
+// =========================
+export async function getProvidersStats(req, res, next) {
+  try {
+    const publisherId = req.publisher?.publisherId;
+    if (!publisherId) {
+      return res.status(401).json({ error: "Publisher not identified" });
+    }
+
+    const daysParam = String(req.query.days || "30").toLowerCase();
+    const isAll = daysParam === "all";
+    const daysRaw = parseInt(daysParam, 10);
+    const days = isAll
+      ? null
+      : Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
+      
+    // 1) Узнаем, есть ли колонка "provider" в impressions
+    const col = await pool.query(
+      `
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'impressions'
+        and column_name = 'provider'
+      limit 1
+      `
+    );
+    const hasProviderCol = col.rowCount > 0;
+
+    // 2) Формируем выражение "provider" безопасно
+    //    если есть impressions.provider -> берём его
+    //    иначе пытаемся взять из impressions.meta->>'provider' (если meta есть)
+    const providerExpr = hasProviderCol
+      ? "COALESCE(NULLIF(i.provider,''), 'UNKNOWN')"
+      : "COALESCE(NULLIF(i.meta->>'provider',''), NULLIF(i.meta->>'network',''), 'UNKNOWN')";
+
+    // 3) Агрегация по провайдерам на основе таблицы impressions
+    //    - показы: status in ('impression','completed')
+    //    - клики: status='click' (если у вас другое — скажи, поправим)
+    const q = await pool.query(
+      `
+      select
+        ${providerExpr} as provider,
+        count(*) filter (where i.status in ('impression','completed'))::int as impressions,
+        count(*) filter (where i.status = 'click')::int as clicks
+      from impressions i
+      join placements p on p.id = i.placement_id
+      where p.publisher_id = $1
+        and p.moderation_status = 'approved'
+        and i.is_fraud = false
+        and ($2::int is null or i.created_at >= now() - ($2 || ' days')::interval)
+      group by 1
+      order by 1
+      `,
+      [publisherId, days]
+    );
+
+    // 4) Доход по провайдерам: если у вас нет разметки дохода по провайдерам,
+    //    возвращаем 0 (UI не будет краснеть)
+    const rows = q.rows.map((r) => ({
+      provider: String(r.provider || "UNKNOWN").toUpperCase(),
+      impressions: Number(r.impressions) || 0,
+      clicks: Number(r.clicks) || 0,
+      revenue_usd: 0,
+      fill_rate: null,
+    }));
+
+    return res.json({
+      days: isAll ? "all" : days,
+      rows,
+    });
+  } catch (e) {
+    next(e);
+  }
+}
+
+
 // =========================
 // ✅ ALIASES FOR ROUTES (FIX)
 // =========================
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
+export const publisherProvidersStats = getProvidersStats;
 
