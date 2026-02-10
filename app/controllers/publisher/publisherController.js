@@ -7,6 +7,9 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// =========================
+// SUMMARY
+// =========================
 export async function getSummary(req, res, next) {
   try {
     const publisherId = req.publisher.publisherId;
@@ -70,6 +73,9 @@ export async function getSummary(req, res, next) {
   }
 }
 
+// =========================
+// DAILY
+// =========================
 export async function getDaily(req, res, next) {
   try {
     const publisherId = req.publisher.publisherId;
@@ -107,6 +113,9 @@ export async function getDaily(req, res, next) {
   }
 }
 
+// =========================
+// PLACEMENTS
+// =========================
 function genId(prefix = "plc") {
   return `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
 }
@@ -117,7 +126,6 @@ function pickAdType(v) {
   return null;
 }
 
-// GET /publisher/placements
 export async function listPlacements(req, res, next) {
   try {
     const publisherId = req.publisher.publisherId;
@@ -141,7 +149,6 @@ export async function listPlacements(req, res, next) {
   }
 }
 
-// POST /publisher/placements
 export async function createPlacement(req, res, next) {
   try {
     const publisherId = req.publisher.publisherId;
@@ -153,27 +160,20 @@ export async function createPlacement(req, res, next) {
     if (!name) return res.status(400).json({ error: "name is required" });
     if (!domain) return res.status(400).json({ error: "domain is required" });
     if (!adType) {
-      return res
-        .status(400)
-        .json({ error: "ad_type must be rewarded_video or interstitial" });
+      return res.status(400).json({
+        error: "ad_type must be rewarded_video or interstitial",
+      });
     }
 
-    // берем любой активный api_key (SDK ключ)
     const keyRes = await pool.query(
-      `SELECT api_key
-       FROM api_keys
-       WHERE status = 'active'
-       LIMIT 1`
+      `SELECT api_key FROM api_keys WHERE status = 'active' LIMIT 1`
     );
-
     if (!keyRes.rowCount) {
       return res.status(500).json({ error: "No active api_key found" });
     }
 
-    const apiKey = keyRes.rows[0].api_key;
-
     const id = genId("plc");
-    const publicKey = crypto.randomBytes(16).toString("hex"); // ключ для SDK
+    const publicKey = crypto.randomBytes(16).toString("hex");
 
     const r = await pool.query(
       `
@@ -181,10 +181,9 @@ export async function createPlacement(req, res, next) {
         (id, api_key, name, ad_type, status, publisher_id, domain, moderation_status, public_key)
       VALUES
         ($1, $2, $3, $4, 'active', $5, $6, 'draft', $7)
-      RETURNING
-        id, name, domain, ad_type, status, moderation_status, public_key, created_at
+      RETURNING *
       `,
-      [id, apiKey, name, adType, publisherId, domain, publicKey]
+      [id, keyRes.rows[0].api_key, name, adType, publisherId, domain, publicKey]
     );
 
     res.json({ placement: r.rows[0] });
@@ -193,7 +192,6 @@ export async function createPlacement(req, res, next) {
   }
 }
 
-// POST /publisher/placements/:id/submit
 export async function submitPlacement(req, res, next) {
   try {
     const publisherId = req.publisher.publisherId;
@@ -222,3 +220,10 @@ export async function submitPlacement(req, res, next) {
     next(e);
   }
 }
+
+// =========================
+// ✅ ALIASES FOR ROUTES (FIX)
+// =========================
+export const publisherSummary = getSummary;
+export const publisherDaily = getDaily;
+
