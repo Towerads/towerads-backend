@@ -3,6 +3,7 @@ import {
   publisherSummary,
   publisherDaily,
   listPlacements,
+  publisherProvidersStats,
 } from "../controllers/publisher/publisherController.js";
 
 import { requireTelegramUser } from "../middlewares/requireTelegramUser.js";
