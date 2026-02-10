@@ -11,46 +11,114 @@ import * as stats from "../controllers/admin/statsController.js";
 
 const router = Router();
 
+// helper: выбирает существующий handler или падает с понятной ошибкой
 function pick(mod, names, routeLabel) {
   for (const n of names) {
     if (typeof mod?.[n] === "function") return mod[n];
   }
-  // Это упадёт при старте с понятным сообщением, а не "undefined"
   throw new Error(
     `Missing handler for ${routeLabel}. Expected one of: ${names.join(", ")}. ` +
     `Available exports: ${Object.keys(mod || {}).join(", ")}`
   );
 }
 
+// ===================
 // AUTH
+// ===================
 router.post("/admin/auth/login", adminLogin);
 
+// ===================
 // ORDERS
-router.get("/admin/orders", pick(orders, ["getOrders", "listOrders"], "GET /admin/orders"));
-router.get("/admin/orders/:id", pick(orders, ["getOrder", "getById"], "GET /admin/orders/:id"));
-router.patch("/admin/orders/:id", pick(orders, ["updateOrder", "update"], "PATCH /admin/orders/:id"));
+// exports: createCreativeOrder, listOrders, orderDetail, pauseOrder, resumeOrder, stopOrder
+// ===================
+router.get(
+  "/admin/orders",
+  pick(orders, ["listOrders"], "GET /admin/orders")
+);
 
+router.get(
+  "/admin/orders/:id",
+  pick(orders, ["orderDetail"], "GET /admin/orders/:id")
+);
+
+router.post(
+  "/admin/orders",
+  pick(orders, ["createCreativeOrder"], "POST /admin/orders")
+);
+
+router.post(
+  "/admin/orders/:id/pause",
+  pick(orders, ["pauseOrder"], "POST /admin/orders/:id/pause")
+);
+
+router.post(
+  "/admin/orders/:id/resume",
+  pick(orders, ["resumeOrder"], "POST /admin/orders/:id/resume")
+);
+
+router.post(
+  "/admin/orders/:id/stop",
+  pick(orders, ["stopOrder"], "POST /admin/orders/:id/stop")
+);
+
+// ===================
 // CREATIVES
-router.get("/admin/creatives", pick(creatives, ["getCreatives", "listCreatives"], "GET /admin/creatives"));
-router.post("/admin/creatives/:id/approve", pick(creatives, ["approveCreative", "approve"], "POST /admin/creatives/:id/approve"));
-router.post("/admin/creatives/:id/reject", pick(creatives, ["rejectCreative", "reject"], "POST /admin/creatives/:id/reject"));
+// (если имена другие — pick сам скажет какие есть)
+// ===================
+router.get(
+  "/admin/creatives",
+  pick(creatives, ["listCreatives", "getCreatives"], "GET /admin/creatives")
+);
 
+router.post(
+  "/admin/creatives/:id/approve",
+  pick(creatives, ["approveCreative", "approve"], "POST /admin/creatives/:id/approve")
+);
+
+router.post(
+  "/admin/creatives/:id/reject",
+  pick(creatives, ["rejectCreative", "reject"], "POST /admin/creatives/:id/reject")
+);
+
+// ===================
 // MEDIATION
-router.get("/admin/mediation", pick(mediation, ["getMediation", "getConfig"], "GET /admin/mediation"));
-router.post("/admin/mediation", pick(mediation, ["saveMediation", "saveConfig"], "POST /admin/mediation"));
+// ===================
+router.get(
+  "/admin/mediation",
+  pick(mediation, ["getMediation", "getConfig"], "GET /admin/mediation")
+);
 
+router.post(
+  "/admin/mediation",
+  pick(mediation, ["saveMediation", "saveConfig"], "POST /admin/mediation")
+);
+
+// ===================
 // PROVIDERS
-router.get("/admin/providers", pick(providersAvail, ["getProviders", "listProviders"], "GET /admin/providers"));
-router.post("/admin/providers", pick(providersAvail, ["saveProviders", "updateProviders"], "POST /admin/providers"));
+// ===================
+router.get(
+  "/admin/providers",
+  pick(providersAvail, ["getProviders", "listProviders"], "GET /admin/providers")
+);
 
+router.post(
+  "/admin/providers",
+  pick(providersAvail, ["saveProviders", "updateProviders"], "POST /admin/providers")
+);
+
+// ===================
 // PUBLISHERS
-router.get("/admin/publishers", pick(publishers, ["getPublishers", "listPublishers"], "GET /admin/publishers"));
+// ===================
+router.get(
+  "/admin/publishers",
+  pick(publishers, ["getPublishers", "listPublishers"], "GET /admin/publishers")
+);
 
+// ===================
 // STATS
+// ===================
 router.get("/admin/stats", stats.adminStats);
 router.get("/admin/stats/providers", stats.adminStatsProviders);
 
 export default router;
 export { router };
-
-
