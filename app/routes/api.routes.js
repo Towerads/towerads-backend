@@ -21,7 +21,7 @@ router.post("/api/tower-ads/impression", tower.impression);
 router.post("/api/tower-ads/complete", tower.complete);
 router.post("/api/tower-ads/click", tower.click);
 
-// ✅ НОВОЕ: click-redirect (нужно для USL, чтобы трекать клики через редирект)
+// click-redirect
 router.get("/api/tower-ads/click-redirect", tower.clickRedirect);
 
 router.get("/api/tower-ads/stats", tower.stats);
@@ -33,7 +33,8 @@ router.get("/api/tower-ads/stats", tower.stats);
  */
 router.use("/api/publisher", publisherRoutes);
 
+// ✅ ДОБАВЛЕНО — ДЛЯ MINI APP / FRONTEND
+router.use("/publisher", publisherRoutes);
+
 export default router;
 export { router };
-
-
