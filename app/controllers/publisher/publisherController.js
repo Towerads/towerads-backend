@@ -7,12 +7,32 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// ✅ минимальный хелпер, чтобы не падать если req.publisher не задан
+function getPublisherId(req) {
+  return req?.publisher?.publisherId ?? null;
+}
+
 // =========================
 // SUMMARY
 // =========================
 export async function getSummary(req, res, next) {
   try {
-    const publisherId = req.publisher.publisherId;
+    const publisherId = getPublisherId(req);
+
+    // ✅ не падаем, если middleware не проставил publisher
+    if (!publisherId) {
+      return res.json({
+        publisher_id: null,
+        balance: {
+          frozen_usd: 0,
+          available_usd: 0,
+          locked_usd: 0,
+          updated_at: null,
+        },
+        impressions_30d: 0,
+        avg_cpm_net_30d: 0,
+      });
+    }
 
     await pool.query(
       `INSERT INTO publisher_balances (publisher_id)
@@ -78,7 +98,7 @@ export async function getSummary(req, res, next) {
 // =========================
 export async function getDaily(req, res, next) {
   try {
-    const publisherId = req.publisher.publisherId;
+    const publisherId = getPublisherId(req);
 
     const daysParam = String(req.query.days || "30").toLowerCase();
     const isAll = daysParam === "all";
@@ -86,6 +106,11 @@ export async function getDaily(req, res, next) {
     const days = isAll
       ? null
       : Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
+
+    // ✅ не падаем, если middleware не проставил publisher
+    if (!publisherId) {
+      return res.json({ days: isAll ? "all" : days, rows: [] });
+    }
 
     const r = await pool.query(
       `
@@ -128,7 +153,12 @@ function pickAdType(v) {
 
 export async function listPlacements(req, res, next) {
   try {
-    const publisherId = req.publisher.publisherId;
+    const publisherId = getPublisherId(req);
+
+    // ✅ не падаем, если middleware не проставил publisher
+    if (!publisherId) {
+      return res.json({ rows: [] });
+    }
 
     const r = await pool.query(
       `
@@ -151,7 +181,11 @@ export async function listPlacements(req, res, next) {
 
 export async function createPlacement(req, res, next) {
   try {
-    const publisherId = req.publisher.publisherId;
+    const publisherId = getPublisherId(req);
+
+    if (!publisherId) {
+      return res.status(401).json({ error: "Publisher not identified" });
+    }
 
     const name = String(req.body?.name || "").trim();
     const domain = String(req.body?.domain || "").trim();
@@ -194,8 +228,12 @@ export async function createPlacement(req, res, next) {
 
 export async function submitPlacement(req, res, next) {
   try {
-    const publisherId = req.publisher.publisherId;
+    const publisherId = getPublisherId(req);
     const id = String(req.params.id);
+
+    if (!publisherId) {
+      return res.status(401).json({ error: "Publisher not identified" });
+    }
 
     const r = await pool.query(
       `
