@@ -9,6 +9,7 @@ import * as publishers from "../controllers/admin/publishersController.js";
 import * as providersAvail from "../controllers/admin/providersAvailabilityController.js";
 import * as stats from "../controllers/admin/statsController.js";
 import * as earnings from "../controllers/admin/earningsController.js";
+import * as placements from "../controllers/admin/placementsController.js";
 
 const router = Router();
 
@@ -78,6 +79,16 @@ router.post("/admin/providers", pickOr501(providersAvail, ["saveProviders", "upd
 // Available exports: adminPublishers
 // ===================
 router.get("/admin/publishers", pickOr501(publishers, ["adminPublishers"]));
+
+// ===================
+// PLACEMENTS MODERATION
+// ===================
+// GET  /admin/placements?status=pending|approved|rejected|draft|all
+router.get("/admin/placements", pickOr501(placements, ["adminPlacements"]));
+// POST /admin/placements/:id/approve
+router.post("/admin/placements/:id/approve", pickOr501(placements, ["adminApprovePlacement"]));
+// POST /admin/placements/:id/reject  { reason }
+router.post("/admin/placements/:id/reject", pickOr501(placements, ["adminRejectPlacement"]));
 
 // ===================
 // STATS

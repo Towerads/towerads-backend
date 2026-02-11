@@ -1,6 +1,8 @@
 import { pool } from "../../config/db.js";
 
-// GET /admin/placements?status=pending|approved|rejected|all
+/**
+ * GET /admin/placements?status=pending|approved|rejected|draft|all
+ */
 export async function adminPlacements(req, res, next) {
   try {
     const status = String(req.query.status || "pending").toLowerCase();
@@ -16,9 +18,14 @@ export async function adminPlacements(req, res, next) {
     const r = await pool.query(
       `
       SELECT
-        p.id, p.name, p.domain, p.ad_type,
+        p.id,
+        p.name,
+        p.domain,
+        p.ad_type,
         p.status,
-        p.moderation_status, p.approved_at, p.rejected_reason,
+        p.moderation_status,
+        p.approved_at,
+        p.rejected_reason,
         p.public_key,
         p.publisher_id,
         p.created_at
@@ -30,24 +37,26 @@ export async function adminPlacements(req, res, next) {
       params
     );
 
-    res.json({ rows: r.rows });
+    return res.json({ rows: r.rows });
   } catch (e) {
     next(e);
   }
 }
 
-// POST /admin/placements/:id/approve
-export async function approvePlacement(req, res, next) {
+/**
+ * POST /admin/placements/:id/approve
+ */
+export async function adminApprovePlacement(req, res, next) {
   try {
-    const id = String(req.params.id);
+    const id = String(req.params.id || "");
 
     const r = await pool.query(
       `
       UPDATE placements
-      SET moderation_status='approved',
-          approved_at=now(),
-          rejected_reason=NULL
-      WHERE id=$1
+      SET moderation_status = 'approved',
+          approved_at = now(),
+          rejected_reason = NULL
+      WHERE id = $1
         AND moderation_status IN ('pending','rejected','draft')
       RETURNING id, moderation_status, approved_at
       `,
@@ -55,19 +64,24 @@ export async function approvePlacement(req, res, next) {
     );
 
     if (!r.rowCount) {
-      return res.status(404).json({ error: "Placement not found or cannot be approved" });
+      return res
+        .status(404)
+        .json({ error: "Placement not found or cannot be approved" });
     }
 
-    res.json({ success: true, placement: r.rows[0] });
+    return res.json({ ok: true, placement: r.rows[0] });
   } catch (e) {
     next(e);
   }
 }
 
-// POST /admin/placements/:id/reject  { reason }
-export async function rejectPlacement(req, res, next) {
+/**
+ * POST /admin/placements/:id/reject
+ * body: { reason }
+ */
+export async function adminRejectPlacement(req, res, next) {
   try {
-    const id = String(req.params.id);
+    const id = String(req.params.id || "");
     const reason = String(req.body?.reason || "").trim();
 
     if (!reason) {
@@ -77,10 +91,10 @@ export async function rejectPlacement(req, res, next) {
     const r = await pool.query(
       `
       UPDATE placements
-      SET moderation_status='rejected',
-          approved_at=NULL,
-          rejected_reason=$2
-      WHERE id=$1
+      SET moderation_status = 'rejected',
+          approved_at = NULL,
+          rejected_reason = $2
+      WHERE id = $1
         AND moderation_status IN ('pending','approved','draft')
       RETURNING id, moderation_status, rejected_reason
       `,
@@ -88,10 +102,12 @@ export async function rejectPlacement(req, res, next) {
     );
 
     if (!r.rowCount) {
-      return res.status(404).json({ error: "Placement not found or cannot be rejected" });
+      return res
+        .status(404)
+        .json({ error: "Placement not found or cannot be rejected" });
     }
 
-    res.json({ success: true, placement: r.rows[0] });
+    return res.json({ ok: true, placement: r.rows[0] });
   } catch (e) {
     next(e);
   }
