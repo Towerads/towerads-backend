@@ -259,7 +259,6 @@ export async function submitPlacement(req, res, next) {
   }
 }
 
-
 // =========================
 // PROVIDERS STATS (TMA)
 // =========================
@@ -277,7 +276,6 @@ export async function getProvidersStats(req, res, next) {
       ? null
       : Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
 
-    
     // impressions.served_provider (text) — финальный провайдер показа
     // impressions.network (text) — fallback
     // impressions.providers (jsonb) — доп.структура
@@ -307,8 +305,6 @@ export async function getProvidersStats(req, res, next) {
       )
     `;
 
-    // ЗАМЕНИ ВНУТРИ getProvidersStats ТОЛЬКО SQL-БЛОК const q = await pool.query(...) НА ЭТО:
-
     const q = await pool.query(
       `
     select
@@ -325,9 +321,8 @@ export async function getProvidersStats(req, res, next) {
     having ${providerExpr} <> 'UNKNOWN'
     order by impressions desc, provider asc
     `,
-    [publisherId, days]
-  );
-
+      [publisherId, days]
+    );
 
     const rows = q.rows.map((r) => ({
       provider: String(r.provider || "UNKNOWN"),
@@ -346,7 +341,9 @@ export async function getProvidersStats(req, res, next) {
   }
 }
 
-
+// =========================
+// SDK SCRIPT (TMA) — строго по ТЗ
+// =========================
 export async function getSdkScript(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
@@ -354,26 +351,45 @@ export async function getSdkScript(req, res, next) {
       return res.status(401).json({ error: "Publisher not identified" });
     }
 
-    // ✅ placement_id ОБЯЗАТЕЛЕН
-    const placementId = String(req.query.placement_id || "").trim();
-    if (!placementId) {
-      return res.status(400).json({ error: "placement_id is required" });
+    // ✅ placement_id НЕ обязателен по ТЗ
+    const placementIdRaw = String(req.query.placement_id || "").trim();
+    const placementId = placementIdRaw ? placementIdRaw : null;
+
+    let r;
+
+    if (placementId) {
+      // ✅ выдаём скрипт только для approved placement (и только своего)
+      r = await pool.query(
+        `
+        SELECT id, name, public_key, ad_type
+        FROM placements
+        WHERE publisher_id = $1
+          AND id = $2
+          AND status = 'active'
+          AND moderation_status = 'approved'
+        LIMIT 1
+        `,
+        [publisherId, placementId]
+      );
+    } else {
+      // ✅ если досок несколько → используем последнюю approved
+      r = await pool.query(
+        `
+        SELECT id, name, public_key, ad_type
+        FROM placements
+        WHERE publisher_id = $1
+          AND status = 'active'
+          AND moderation_status = 'approved'
+        ORDER BY approved_at DESC NULLS LAST, created_at DESC
+        LIMIT 1
+        `,
+        [publisherId]
+      );
     }
 
-    const r = await pool.query(
-      `
-      SELECT id, name, public_key, ad_type
-      FROM placements
-      WHERE publisher_id = $1
-        AND moderation_status = 'approved'
-        AND id = $2
-      LIMIT 1
-      `,
-      [publisherId, placementId]
-    );
-
+    // ✅ SDK выдаётся только после модерации: approved обязателен
     if (!r.rowCount) {
-      return res.status(403).json({ error: "Placement not approved yet" });
+      return res.status(404).json({ error: "NO_APPROVED_PLACEMENT" });
     }
 
     const p = r.rows[0];
@@ -410,14 +426,11 @@ export async function getSdkScript(req, res, next) {
   }
 }
 
-
-
-
-
 // =========================
 // ✅ ALIASES FOR ROUTES (FIX)
 // =========================
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
+
 

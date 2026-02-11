@@ -23,7 +23,7 @@ async function requireActiveApiKey(api_key) {
 async function requireActivePlacement(api_key, placement_id) {
   const r = await pool.query(
     `
-    SELECT id, ad_type, status
+    SELECT id, ad_type, status, moderation_status
     FROM placements
     WHERE api_key = $1 AND id = $2
     `,
@@ -33,6 +33,8 @@ async function requireActivePlacement(api_key, placement_id) {
   if (r.rowCount === 0) return { ok: false, error: "Invalid placement_id" };
   if (r.rows[0].status !== "active")
     return { ok: false, error: "placement paused" };
+  if (r.rows[0].moderation_status !== "approved")
+    return { ok: false, error: "placement not approved" };
 
   return { ok: true, placement: r.rows[0] };
 }
@@ -53,7 +55,6 @@ async function findPlacementByPublicKey(public_key) {
     return { ok: false, error: "placement paused" };
   if (r.rows[0].moderation_status !== "approved")
     return { ok: false, error: "placement not approved" };
-
 
   return { ok: true, placement: r.rows[0] };
 }
@@ -158,8 +159,6 @@ async function decideProviders(placement_id) {
 
   return providers;
 }
-
-  
 
 // --------------------
 // API ENDPOINTS
@@ -316,7 +315,7 @@ export async function requestAd(req, res) {
 export async function providerResultBatch(req, res) {
   try {
     const { impression_id, served_provider } = req.body || {};
-    const attempts = (req.body?.attempts ?? req.body?.attemptps);
+    const attempts = req.body?.attempts ?? req.body?.attemptps;
 
     if (!impression_id) return fail(res, "Missing impression_id", 400);
     if (!Array.isArray(attempts)) return fail(res, "Missing attempts[]", 400);
@@ -335,7 +334,6 @@ export async function providerResultBatch(req, res) {
     if (!imp.rowCount) return ok(res);
     const placementId = imp.rows[0].placement_id;
     const NOFILL_LIMIT = 3;
-    
 
     // 1) сохраняем все попытки + обновляем provider_state
     for (const a of attempts) {
@@ -423,12 +421,16 @@ export async function providerResultBatch(req, res) {
       const filled = attempts.find((a) => {
         const p = a?.provider;
         let result = (a?.status || "error").toLowerCase();
-        if (result === "no_fill" || result === "no-fill" || result === "nofill") {
+        if (
+          result === "no_fill" ||
+          result === "no-fill" ||
+          result === "nofill"
+        ) {
           result = "nofill";
         }
         return p && result === "filled";
       });
-    
+
       winner = filled?.provider || null;
     }
 
@@ -452,7 +454,7 @@ export async function providerResultBatch(req, res) {
           `,
           [String(winner).toLowerCase(), impression_id]
         );
-      }  
+      }
     }
 
     return ok(res);
@@ -530,7 +532,12 @@ export async function impression(req, res) {
     // ✅ USL определяется по network, а не по source
     if (meta.rows[0].network === "usl") {
       const orderId = meta.rows[0].order_id;
-      const pricePerImp = Number(meta.rows[0].price_per_impression || 0);
+
+      // ✅ price_per_impression в БД = CPM в USD ($ за 1000 показов)
+      const cpmUsd = Number(meta.rows[0].price_per_impression || 0);
+
+      // ✅ доход за 1 показ
+      const revenueUsd = cpmUsd / 1000;
 
       if (!orderId)
         return fail(
@@ -548,7 +555,7 @@ export async function impression(req, res) {
         WHERE id = $2
           AND status = 'requested'
         `,
-        [pricePerImp, impression_id]
+        [revenueUsd, impression_id]
       );
 
       const left = await pool.query(
