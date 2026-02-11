@@ -276,9 +276,6 @@ export async function getProvidersStats(req, res, next) {
       ? null
       : Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
 
-    // impressions.served_provider (text) — финальный провайдер показа
-    // impressions.network (text) — fallback
-    // impressions.providers (jsonb) — доп.структура
     const providerExpr = `
       UPPER(
         COALESCE(
@@ -307,20 +304,20 @@ export async function getProvidersStats(req, res, next) {
 
     const q = await pool.query(
       `
-    select
-      ${providerExpr} as provider,
-      count(*) filter (where i.status in ('impression','completed'))::int as impressions,
-      count(*) filter (where i.status = 'clicked')::int as clicks
-    from impressions i
-    join placements p on p.id = i.placement_id
-    where p.publisher_id = $1
-      and p.moderation_status = 'approved'
-      and i.is_fraud = false
-      and ($2::int is null or i.created_at >= now() - ($2 || ' days')::interval)
-    group by 1
-    having ${providerExpr} <> 'UNKNOWN'
-    order by impressions desc, provider asc
-    `,
+      select
+        ${providerExpr} as provider,
+        count(*) filter (where i.status in ('impression','completed'))::int as impressions,
+        count(*) filter (where i.status = 'clicked')::int as clicks
+      from impressions i
+      join placements p on p.id = i.placement_id
+      where p.publisher_id = $1
+        and p.moderation_status = 'approved'
+        and i.is_fraud = false
+        and ($2::int is null or i.created_at >= now() - ($2 || ' days')::interval)
+      group by 1
+      having ${providerExpr} <> 'UNKNOWN'
+      order by impressions desc, provider asc
+      `,
       [publisherId, days]
     );
 
@@ -351,14 +348,13 @@ export async function getSdkScript(req, res, next) {
       return res.status(401).json({ error: "Publisher not identified" });
     }
 
-    // ✅ placement_id НЕ обязателен по ТЗ
+    // ✅ placement_id НЕ обязателен: если не передан — берём последнюю approved
     const placementIdRaw = String(req.query.placement_id || "").trim();
     const placementId = placementIdRaw ? placementIdRaw : null;
 
     let r;
 
     if (placementId) {
-      // ✅ выдаём скрипт только для approved placement (и только своего)
       r = await pool.query(
         `
         SELECT id, name, public_key, ad_type
@@ -372,7 +368,6 @@ export async function getSdkScript(req, res, next) {
         [publisherId, placementId]
       );
     } else {
-      // ✅ если досок несколько → используем последнюю approved
       r = await pool.query(
         `
         SELECT id, name, public_key, ad_type
@@ -387,7 +382,6 @@ export async function getSdkScript(req, res, next) {
       );
     }
 
-    // ✅ SDK выдаётся только после модерации: approved обязателен
     if (!r.rowCount) {
       return res.status(404).json({ error: "NO_APPROVED_PLACEMENT" });
     }
@@ -432,5 +426,6 @@ export async function getSdkScript(req, res, next) {
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
+
 
 
