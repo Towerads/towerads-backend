@@ -277,7 +277,7 @@ export async function getProvidersStats(req, res, next) {
       ? null
       : Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
 
-    // ✅ У тебя реальная схема:
+    
     // impressions.served_provider (text) — финальный провайдер показа
     // impressions.network (text) — fallback
     // impressions.providers (jsonb) — доп.структура
@@ -307,23 +307,27 @@ export async function getProvidersStats(req, res, next) {
       )
     `;
 
+    // ЗАМЕНИ ВНУТРИ getProvidersStats ТОЛЬКО SQL-БЛОК const q = await pool.query(...) НА ЭТО:
+
     const q = await pool.query(
       `
-      select
-        ${providerExpr} as provider,
-        count(*) filter (where i.status in ('impression','completed'))::int as impressions,
-        count(*) filter (where i.status = 'clicked')::int as clicks
-      from impressions i
-      join placements p on p.id = i.placement_id
-      where p.publisher_id = $1
-        and p.moderation_status = 'approved'
-        and i.is_fraud = false
-        and ($2::int is null or i.created_at >= now() - ($2 || ' days')::interval)
-      group by 1
-      order by impressions desc, provider asc
-      `,
-      [publisherId, days]
-    );
+    select
+      ${providerExpr} as provider,
+      count(*) filter (where i.status in ('impression','completed'))::int as impressions,
+      count(*) filter (where i.status = 'clicked')::int as clicks
+    from impressions i
+    join placements p on p.id = i.placement_id
+    where p.publisher_id = $1
+      and p.moderation_status = 'approved'
+      and i.is_fraud = false
+      and ($2::int is null or i.created_at >= now() - ($2 || ' days')::interval)
+    group by 1
+    having ${providerExpr} <> 'UNKNOWN'
+    order by impressions desc, provider asc
+    `,
+    [publisherId, days]
+  );
+
 
     const rows = q.rows.map((r) => ({
       provider: String(r.provider || "UNKNOWN"),

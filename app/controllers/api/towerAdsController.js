@@ -587,10 +587,9 @@ export async function impression(req, res) {
     }
 
     // остальные сети: CPM
-    const bid = Number(meta.rows[0].bid_cpm_usd || 0);
-    const payout = Number(meta.rows[0].payout_cpm_usd || 0);
-    const revenue = bid / 1000;
-    const cost = payout / 1000;
+    const FIXED_CPM_USD = Number(process.env.FIXED_CPM_USD || 0.5); // $ за 1000
+    const revenue = FIXED_CPM_USD / 1000; // доход за 1 показ
+    const cost = 0;
 
     const upd = await pool.query(
       `
