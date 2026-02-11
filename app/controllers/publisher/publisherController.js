@@ -155,7 +155,6 @@ export async function listPlacements(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
 
-    // ✅ не падаем, если middleware не проставил publisher
     if (!publisherId) {
       return res.json({ rows: [] });
     }
@@ -348,7 +347,7 @@ export async function getSdkScript(req, res, next) {
       return res.status(401).json({ error: "Publisher not identified" });
     }
 
-    // ✅ placement_id НЕ обязателен: если не передан — берём последнюю approved
+    // ✅ placement_id НЕ обязателен по ТЗ
     const placementIdRaw = String(req.query.placement_id || "").trim();
     const placementId = placementIdRaw ? placementIdRaw : null;
 
@@ -382,6 +381,7 @@ export async function getSdkScript(req, res, next) {
       );
     }
 
+    // ✅ выдаём только после approve
     if (!r.rowCount) {
       return res.status(404).json({ error: "NO_APPROVED_PLACEMENT" });
     }
@@ -426,6 +426,7 @@ export async function getSdkScript(req, res, next) {
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
+
 
 
 

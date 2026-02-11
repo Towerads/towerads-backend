@@ -1,4 +1,3 @@
-// towerads-backend/app/routes/publisher.routes.js
 import { Router } from "express";
 import {
   publisherSummary,
@@ -24,32 +23,23 @@ router.use(requireTelegramUser);
 router.use(requirePublisher);
 
 /**
- * SUMMARY / DAILY / PROVIDERS
+ * GET  /publisher/summary
+ * GET  /publisher/daily
+ * GET  /publisher/placements
+ * POST /publisher/placements             ✅ create placement
+ * POST /publisher/placements/:id/submit  ✅ send to moderation
+ * GET  /publisher/providers/stats
+ * GET  /publisher/sdk-script
  */
 router.get("/summary", publisherSummary);
 router.get("/daily", publisherDaily);
-router.get("/providers/stats", publisherProvidersStats);
 
-/**
- * PLACEMENTS
- * ✅ GET  /publisher/placements
- * ✅ POST /publisher/placements          (create draft)
- * ✅ POST /publisher/placements/:id/submit (send to moderation)
- */
 router.get("/placements", listPlacements);
 router.post("/placements", createPlacement);
 router.post("/placements/:id/submit", submitPlacement);
 
-/**
- * SDK SCRIPT (ONLY APPROVED)
- * ✅ GET /publisher/sdk-script?placement_id=...
- * placement_id optional: if not provided -> last approved
- */
+router.get("/providers/stats", publisherProvidersStats);
 router.get("/sdk-script", getSdkScript);
 
 export default router;
 export { router };
-
-
-
-
