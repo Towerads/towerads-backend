@@ -320,14 +320,19 @@ export async function providerResultBatch(req, res) {
 
     // ✅ сразу берём placement_id, чтобы писать provider_state
     const imp = await pool.query(
-      `SELECT placement_id FROM impressions WHERE id = $1 AND status = 'requested'`,
+      `
+      SELECT placement_id
+      FROM impressions
+      WHERE id = $1
+        AND status IN ('requested','impression','completed','clicked')
+      `,
       [impression_id]
     );
-    if (!imp.rowCount) return fail(res, "Invalid impression state", 400);
 
+    if (!imp.rowCount) return ok(res);
     const placementId = imp.rows[0].placement_id;
 
-    const NOFILL_LIMIT = 3;
+    
 
     // 1) сохраняем все попытки + обновляем provider_state
     for (const a of attempts) {
