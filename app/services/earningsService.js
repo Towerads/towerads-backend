@@ -1,5 +1,23 @@
 // towerads-backend/app/services/earningsService.js
-const db = require("../config/db");
+const pkg = require("pg");
+const { Pool } = pkg;
+
+// ✅ отдельный pool, но на тех же ENV, что и основной
+// (без смешения import/module.exports — сборка не ломается)
+const pool = new Pool({
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT || 5432),
+  database: process.env.POSTGRES_DB,
+  user: process.env.POSTGRES_USER,
+  password: process.env.POSTGRES_PASSWORD,
+  ssl: { rejectUnauthorized: false },
+});
+
+// (необязательно, но удобно видеть в логах Render)
+pool
+  .query("SELECT 1")
+  .then(() => console.log("✅ earningsService: PostgreSQL connected"))
+  .catch((err) => console.error("❌ earningsService: PostgreSQL connection error:", err));
 
 function toNumber(v) {
   if (v === null || v === undefined) return 0;
@@ -29,17 +47,16 @@ function dayKey(dateObj) {
 async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {}) {
   if (!day) throw new Error("accrueDailyEarnings: day is required");
 
-  // Делаем границы дня в UTC: [day 00:00, next day 00:00)
+  // Границы дня в UTC: [day 00:00, next day 00:00)
   const dayStart = new Date(`${typeof day === "string" ? day : dayKey(day)}T00:00:00.000Z`);
   const nextDay = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
-  const client = await db.connect();
+  const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Находим агрегаты по approved placements
-    // Считаем только impression/completed, is_fraud=false
-    const agg = await client.query(
+    // Агрегируем gross по approved placements
+    const q = await client.query(
       `
       WITH agg AS (
         SELECT
@@ -91,11 +108,12 @@ async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {})
       [dayStart.toISOString(), nextDay.toISOString(), revshare, freezeDays, dayKey(dayStart)]
     );
 
-    const inserted = agg.rows[0]?.inserted ?? 0;
-    const totalNet = toNumber(agg.rows[0]?.total_net);
+    const inserted = q.rows[0]?.inserted ?? 0;
+    const totalNet = toNumber(q.rows[0]?.total_net);
 
-    // Обновим frozen_usd в balances на сумму новых начислений (только если что-то вставили)
+    // Обновляем frozen_usd только если реально вставили новые строки
     if (inserted > 0) {
+      // гарантируем, что balance-строки существуют
       await client.query(
         `
         INSERT INTO publisher_balances (publisher_id)
@@ -104,7 +122,7 @@ async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {})
         `
       );
 
-      // суммируем именно за этот dayKey, чтобы не пересчитывать лишнее
+      // добавляем в frozen сумму начислений за конкретный dayKey
       await client.query(
         `
         WITH addm AS (
@@ -144,11 +162,10 @@ async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {})
  * @returns {Promise<{unfrozenPublishers:number, unfrozenTotal:number}>}
  */
 async function unfreezeDueEarnings() {
-  const client = await db.connect();
+  const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    // Берём всё, что созрело, блокируем строки, чтобы параллельный ран не трогал их
     const due = await client.query(
       `
       SELECT id, publisher_id, amount_usd
@@ -166,7 +183,6 @@ async function unfreezeDueEarnings() {
       return { unfrozenPublishers: 0, unfrozenTotal: 0 };
     }
 
-    // Группируем по publisher
     const map = new Map();
     for (const r of due.rows) {
       const pid = r.publisher_id;
@@ -174,7 +190,6 @@ async function unfreezeDueEarnings() {
       map.set(pid, (map.get(pid) || 0) + amt);
     }
 
-    // Помечаем исходные как settled
     await client.query(
       `
       UPDATE publisher_ledger
@@ -184,7 +199,6 @@ async function unfreezeDueEarnings() {
       [due.rows.map((r) => r.id)]
     );
 
-    // Вставляем UNFREEZE_NET (идемпотентность по времени не нужна, т.к. due уже settled)
     for (const [publisherId, sumAmt] of map.entries()) {
       await client.query(
         `
@@ -195,10 +209,13 @@ async function unfreezeDueEarnings() {
            ('unfreeze:pub=' || $1 || ':ts=' || extract(epoch from now())::bigint),
            jsonb_build_object('unfrozen_from_count', $3))
         `,
-        [publisherId, sumAmt.toFixed(6), due.rows.filter((x) => x.publisher_id === publisherId).length]
+        [
+          publisherId,
+          sumAmt.toFixed(6),
+          due.rows.filter((x) => x.publisher_id === publisherId).length,
+        ]
       );
 
-      // Обновляем balances
       await client.query(
         `
         INSERT INTO publisher_balances (publisher_id)
