@@ -362,6 +362,7 @@ export async function getSdkScript(req, res, next) {
       SELECT id, name, public_key, ad_type
       FROM placements
       WHERE publisher_id = $1
+        AND moderation_status = 'approved'
         AND ($2 = '' OR id = $2)
       ORDER BY created_at DESC
       LIMIT 1
@@ -370,7 +371,7 @@ export async function getSdkScript(req, res, next) {
     );
 
     if (!r.rowCount) {
-      return res.status(404).json({ error: "No placements found" });
+      return res.status(403).json({ error: "Placement not approved yet" });
     }
 
     const p = r.rows[0];

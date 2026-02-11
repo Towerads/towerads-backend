@@ -40,7 +40,7 @@ async function requireActivePlacement(api_key, placement_id) {
 async function findPlacementByPublicKey(public_key) {
   const r = await pool.query(
     `
-    SELECT id, api_key, ad_type, status
+    SELECT id, api_key, ad_type, status, moderation_status
     FROM placements
     WHERE public_key = $1
     `,
@@ -51,6 +51,9 @@ async function findPlacementByPublicKey(public_key) {
     return { ok: false, error: "Invalid placement_public_key" };
   if (r.rows[0].status !== "active")
     return { ok: false, error: "placement paused" };
+  if (r.rows[0].moderation_status !== "approved")
+    return { ok: false, error: "placement not approved" };
+
 
   return { ok: true, placement: r.rows[0] };
 }
