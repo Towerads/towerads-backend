@@ -409,10 +409,25 @@ export async function providerResultBatch(req, res) {
     }
 
     // 2) если был fill — фиксируем winner
-    if (served_provider) {
-      const allowed = attempts.map((a) => a.provider).filter(Boolean);
+    let winner = served_provider || null;
+    if (!winner) {
+      const filled = attempts.find((a) => {
+        const p = a?.provider;
+        let result = (a?.status || "error").toLowerCase();
+        if (result === "no_fill" || result === "no-fill" || result === "nofill") {
+          result = "nofill";
+        }
+        return p && result === "filled";
+      });
+    
+      winner = filled?.provider || null;
+    }
 
-      if (!allowed.includes(served_provider)) {
+    if (winner) {
+      const allowed = attempts.map((a) => a?.provider).filter(Boolean);
+
+      // если served_provider пришёл, но его нет в attempts — оставляем прежнюю защиту
+      if (served_provider && !allowed.includes(served_provider)) {
         return fail(res, "served_provider not in attempts", 400);
       }
 
@@ -425,9 +440,10 @@ export async function providerResultBatch(req, res) {
         WHERE id = $2
           AND status = 'requested'
         `,
-        [served_provider, impression_id]
+        [String(winner).toLowerCase(), impression_id]
       );
-    }
+    }  
+      
 
     return ok(res);
   } catch (e) {
