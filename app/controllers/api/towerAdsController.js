@@ -331,7 +331,7 @@ export async function providerResultBatch(req, res) {
 
     if (!imp.rowCount) return ok(res);
     const placementId = imp.rows[0].placement_id;
-
+    const NOFILL_LIMIT = 3;
     
 
     // 1) сохраняем все попытки + обновляем provider_state
@@ -430,26 +430,27 @@ export async function providerResultBatch(req, res) {
     }
 
     if (winner) {
+      const norm = (s) => String(s || "").trim().toLowerCase();
       const allowed = attempts.map((a) => a?.provider).filter(Boolean);
 
       // если served_provider пришёл, но его нет в attempts — оставляем прежнюю защиту
-      if (served_provider && !allowed.includes(served_provider)) {
-        return fail(res, "served_provider not in attempts", 400);
+      if (served_provider && !allowed.includes(norm(served_provider))) {
+        winner = null;
       }
-
-      await pool.query(
-        `
-        UPDATE impressions
-        SET served_provider = $1,
-            served_at = now(),
-            network = $1
-        WHERE id = $2
-          AND status IN ('requested','impression','completed')
-        `,
-        [String(winner).toLowerCase(), impression_id]
-      );
-    }  
-      
+      if (winner) {
+        await pool.query(
+          `
+          UPDATE impressions
+          SET served_provider = $1,
+              served_at = now(),
+              network = $1
+          WHERE id = $2
+            AND status IN ('requested','impression','completed')
+          `,
+          [String(winner).toLowerCase(), impression_id]
+        );
+      }  
+    }
 
     return ok(res);
   } catch (e) {
