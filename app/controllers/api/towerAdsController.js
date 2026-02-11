@@ -312,7 +312,8 @@ export async function requestAd(req, res) {
 
 export async function providerResultBatch(req, res) {
   try {
-    const { impression_id, attempts, served_provider } = req.body || {};
+    const { impression_id, served_provider } = req.body || {};
+    const attempts = (req.body?.attempts ?? req.body?.attemptps);
 
     if (!impression_id) return fail(res, "Missing impression_id", 400);
     if (!Array.isArray(attempts)) return fail(res, "Missing attempts[]", 400);
