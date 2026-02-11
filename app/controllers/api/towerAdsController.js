@@ -439,7 +439,7 @@ export async function providerResultBatch(req, res) {
             served_at = now(),
             network = $1
         WHERE id = $2
-          AND status = 'requested'
+          AND status IN ('requested','impression','completed')
         `,
         [String(winner).toLowerCase(), impression_id]
       );
