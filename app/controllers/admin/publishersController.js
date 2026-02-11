@@ -1,3 +1,4 @@
+// towerads-backend/app/controllers/admin/publishersController.js
 import { pool } from "../../config/db.js";
 
 export async function adminPublishers(req, res) {
@@ -29,9 +30,39 @@ export async function adminPublishers(req, res) {
       ORDER BY impressions DESC
     `);
 
-    res.json({ publishers: r.rows });
+    return res.json({ publishers: r.rows });
   } catch (err) {
     console.error("❌ /admin/publishers error:", err);
-    res.status(500).json({ error: "publishers error" });
+    return res.status(500).json({ error: "publishers error" });
+  }
+}
+
+// ✅ NEW: /admin/publisher-placements
+export async function adminPublisherPlacements(req, res) {
+  try {
+    const r = await pool.query(`
+      SELECT
+        pl.id,
+        pl.name,
+        pl.domain,
+        pl.ad_type,
+        pl.status,
+        pl.moderation_status,
+        pl.public_key,
+        pl.approved_at,
+        pl.rejected_reason,
+        pl.created_at,
+
+        pl.publisher_id,
+        p.name AS publisher_username
+      FROM placements pl
+      LEFT JOIN publishers p ON p.id = pl.publisher_id
+      ORDER BY pl.created_at DESC
+    `);
+
+    return res.json({ rows: r.rows });
+  } catch (err) {
+    console.error("❌ /admin/publisher-placements error:", err);
+    return res.status(500).json({ error: "publisher placements error" });
   }
 }
