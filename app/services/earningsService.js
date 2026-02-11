@@ -1,9 +1,8 @@
 // towerads-backend/app/services/earningsService.js
-const pkg = require("pg");
+import pkg from "pg";
 const { Pool } = pkg;
 
-// ✅ отдельный pool, но на тех же ENV, что и основной
-// (без смешения import/module.exports — сборка не ломается)
+// ✅ pool на тех же env
 const pool = new Pool({
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT || 5432),
@@ -13,11 +12,12 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false },
 });
 
-// (необязательно, но удобно видеть в логах Render)
 pool
   .query("SELECT 1")
   .then(() => console.log("✅ earningsService: PostgreSQL connected"))
-  .catch((err) => console.error("❌ earningsService: PostgreSQL connection error:", err));
+  .catch((err) =>
+    console.error("❌ earningsService: PostgreSQL connection error:", err)
+  );
 
 function toNumber(v) {
   if (v === null || v === undefined) return 0;
@@ -34,20 +34,9 @@ function dayKey(dateObj) {
   return `${y}-${m}-${day}`;
 }
 
-/**
- * Начисление net (frozen) по показам за конкретный день (UTC).
- * Идемпотентность: ledger_key = earn:pub=<id>:pl=<placement>:day=<YYYY-MM-DD>:net
- *
- * @param {Object} opts
- * @param {string|Date} opts.day - день начисления (UTC). Например "2026-02-08" или Date.
- * @param {number} opts.revshare - доля паблишера (0..1)
- * @param {number} opts.freezeDays - дни заморозки (например 5)
- * @returns {Promise<{inserted:number, totalNet:number}>}
- */
-async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {}) {
+export async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {}) {
   if (!day) throw new Error("accrueDailyEarnings: day is required");
 
-  // Границы дня в UTC: [day 00:00, next day 00:00)
   const dayStart = new Date(`${typeof day === "string" ? day : dayKey(day)}T00:00:00.000Z`);
   const nextDay = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
@@ -55,7 +44,6 @@ async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {})
   try {
     await client.query("BEGIN");
 
-    // Агрегируем gross по approved placements
     const q = await client.query(
       `
       WITH agg AS (
@@ -111,9 +99,7 @@ async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {})
     const inserted = q.rows[0]?.inserted ?? 0;
     const totalNet = toNumber(q.rows[0]?.total_net);
 
-    // Обновляем frozen_usd только если реально вставили новые строки
     if (inserted > 0) {
-      // гарантируем, что balance-строки существуют
       await client.query(
         `
         INSERT INTO publisher_balances (publisher_id)
@@ -122,7 +108,6 @@ async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {})
         `
       );
 
-      // добавляем в frozen сумму начислений за конкретный dayKey
       await client.query(
         `
         WITH addm AS (
@@ -152,16 +137,7 @@ async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {})
   }
 }
 
-/**
- * Разморозка всех due начислений:
- * - находит EARN_NET_FROZEN, где available_at <= now() и status='posted'
- * - переводит их в settled
- * - добавляет одну запись UNFREEZE_NET на сумму (по publisher_id)
- * - обновляет publisher_balances: frozen -= sum, available += sum
- *
- * @returns {Promise<{unfrozenPublishers:number, unfrozenTotal:number}>}
- */
-async function unfreezeDueEarnings() {
+export async function unfreezeDueEarnings() {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -250,8 +226,3 @@ async function unfreezeDueEarnings() {
     client.release();
   }
 }
-
-module.exports = {
-  accrueDailyEarnings,
-  unfreezeDueEarnings,
-};
