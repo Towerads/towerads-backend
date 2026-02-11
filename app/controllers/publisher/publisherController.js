@@ -277,35 +277,42 @@ export async function getProvidersStats(req, res, next) {
       ? null
       : Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
 
-    // 1) Узнаем, есть ли колонка "provider" в impressions
-    const col = await pool.query(
-      `
-      select 1
-      from information_schema.columns
-      where table_schema = 'public'
-        and table_name = 'impressions'
-        and column_name = 'provider'
-      limit 1
-      `
-    );
-    const hasProviderCol = col.rowCount > 0;
+    // ✅ У тебя реальная схема:
+    // impressions.served_provider (text) — финальный провайдер показа
+    // impressions.network (text) — fallback
+    // impressions.providers (jsonb) — доп.структура
+    const providerExpr = `
+      UPPER(
+        COALESCE(
+          NULLIF(i.served_provider, ''),
+          NULLIF(i.network, ''),
+          CASE
+            WHEN i.providers IS NULL THEN NULL
+            WHEN jsonb_typeof(i.providers) = 'object' THEN
+              NULLIF(COALESCE(
+                i.providers->>'served_provider',
+                i.providers->>'provider',
+                i.providers->>'network'
+              ), '')
+            WHEN jsonb_typeof(i.providers) = 'array' THEN
+              NULLIF(COALESCE(
+                i.providers->0->>'served_provider',
+                i.providers->0->>'provider',
+                i.providers->0->>'network'
+              ), '')
+            ELSE NULL
+          END,
+          'UNKNOWN'
+        )
+      )
+    `;
 
-    // 2) Формируем выражение "provider" безопасно
-    //    если есть impressions.provider -> берём его
-    //    иначе пытаемся взять из impressions.meta->>'provider' (если meta есть)
-    const providerExpr = hasProviderCol
-      ? "COALESCE(NULLIF(i.provider,''), 'UNKNOWN')"
-      : "COALESCE(NULLIF(i.meta->>'provider',''), NULLIF(i.meta->>'network',''), 'UNKNOWN')";
-
-    // 3) Агрегация по провайдерам на основе таблицы impressions
-    //    - показы: status in ('impression','completed')
-    //    - клики: status='click' (если у вас другое — скажи, поправим)
     const q = await pool.query(
       `
       select
         ${providerExpr} as provider,
         count(*) filter (where i.status in ('impression','completed'))::int as impressions,
-        count(*) filter (where i.status = 'click')::int as clicks
+        count(*) filter (where i.status = 'clicked')::int as clicks
       from impressions i
       join placements p on p.id = i.placement_id
       where p.publisher_id = $1
@@ -313,15 +320,13 @@ export async function getProvidersStats(req, res, next) {
         and i.is_fraud = false
         and ($2::int is null or i.created_at >= now() - ($2 || ' days')::interval)
       group by 1
-      order by 1
+      order by impressions desc, provider asc
       `,
       [publisherId, days]
     );
 
-    // 4) Доход по провайдерам: если у вас нет разметки дохода по провайдерам,
-    //    возвращаем 0 (UI не будет краснеть)
     const rows = q.rows.map((r) => ({
-      provider: String(r.provider || "UNKNOWN").toUpperCase(),
+      provider: String(r.provider || "UNKNOWN"),
       impressions: Number(r.impressions) || 0,
       clicks: Number(r.clicks) || 0,
       revenue_usd: 0,
@@ -336,6 +341,7 @@ export async function getProvidersStats(req, res, next) {
     next(e);
   }
 }
+
 
 export async function getSdkScript(req, res, next) {
   try {
