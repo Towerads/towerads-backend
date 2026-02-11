@@ -354,8 +354,11 @@ export async function getSdkScript(req, res, next) {
       return res.status(401).json({ error: "Publisher not identified" });
     }
 
-    // можно передавать placement_id, но если не передали — берём самый свежий
+    // ✅ placement_id ОБЯЗАТЕЛЕН
     const placementId = String(req.query.placement_id || "").trim();
+    if (!placementId) {
+      return res.status(400).json({ error: "placement_id is required" });
+    }
 
     const r = await pool.query(
       `
@@ -363,8 +366,7 @@ export async function getSdkScript(req, res, next) {
       FROM placements
       WHERE publisher_id = $1
         AND moderation_status = 'approved'
-        AND ($2 = '' OR id = $2)
-      ORDER BY created_at DESC
+        AND id = $2
       LIMIT 1
       `,
       [publisherId, placementId]
@@ -376,7 +378,6 @@ export async function getSdkScript(req, res, next) {
 
     const p = r.rows[0];
 
-    // URL SDK берём из env, чтобы можно было менять без релиза
     const sdkUrl =
       process.env.TOWERADS_SDK_URL ||
       "https://portal.yourdomain.com/sdk/tower-ads-v4.js";
@@ -408,6 +409,7 @@ export async function getSdkScript(req, res, next) {
     next(e);
   }
 }
+
 
 
 
