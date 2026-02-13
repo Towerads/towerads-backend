@@ -6,7 +6,6 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-// ✅ минимальный хелпер, чтобы не падать если req.publisher не задан
 function getPublisherId(req) {
   return req?.publisher?.publisherId ?? null;
 }
@@ -62,7 +61,6 @@ export async function getSummary(req, res, next) {
       [publisherId]
     );
 
-    // ✅ По ТЗ: цифры/стата должны идти из дневной агрегации
     const stats30 = await pool.query(
       `
       SELECT
@@ -78,10 +76,9 @@ export async function getSummary(req, res, next) {
     const impressions30 = Number(stats30.rows[0]?.impressions_30d || 0);
     const income30 = num(stats30.rows[0]?.income_30d || 0);
 
-    const avgCpmNet30 =
-      impressions30 > 0 ? (income30 / impressions30) * 1000 : 0;
+    const avgCpmNet30 = impressions30 > 0 ? (income30 / impressions30) * 1000 : 0;
 
-    return res.json({
+    res.json({
       publisher_id: publisherId,
       balance: {
         frozen_usd: num(bal.rows[0]?.frozen_usd),
@@ -98,16 +95,14 @@ export async function getSummary(req, res, next) {
 }
 
 // =========================
-// DAILY (ПО ТЗ: из placement_daily_stats)
+// DAILY
 // =========================
 export async function getDaily(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
 
-    // ✅ фильтр по доске
     const placementId = String(req.query.placement_id || "").trim() || null;
 
-    // ✅ диапазон дат (приоритетнее days)
     const from = toYMD(req.query.from);
     const to = toYMD(req.query.to);
 
@@ -136,16 +131,12 @@ export async function getDaily(req, res, next) {
       where += ` AND placement_id = $${params.length}`;
     }
 
-    // ✅ если указан диапазон — используем его
     if (from && to) {
       params.push(from, to);
       where += ` AND date_key >= $${params.length - 1}::date AND date_key <= $${params.length}::date`;
     } else if (days !== null) {
       params.push(days);
-      // последние N дней включая сегодня
       where += ` AND date_key >= (now()::date - ($${params.length}::int - 1))`;
-    } else {
-      // all — без ограничения
     }
 
     const r = await pool.query(
@@ -184,7 +175,7 @@ export async function getDaily(req, res, next) {
 }
 
 // =========================
-// DASHBOARD (ACTIVE APPROVED PLACEMENTS + PERIOD STATS) ✅ HARD FIX
+// DASHBOARD (ACTIVE APPROVED PLACEMENTS + PERIOD STATS) ✅ FIXED REAL
 // =========================
 export async function getDashboard(req, res, next) {
   try {
@@ -203,22 +194,22 @@ export async function getDashboard(req, res, next) {
       });
     }
 
-    // default period = last 30 days
+    // ✅ default period = last 30 days (СРАЗУ строками YYYY-MM-DD!)
     let fromSql = fromQ;
     let toSql = toQ;
 
     if (!fromSql || !toSql) {
-      const q = await pool.query(
-        `select (now()::date - interval '29 days')::date as f,
-                (now()::date)::date as t`
-      );
+      const q = await pool.query(`
+        SELECT
+          to_char((now()::date - interval '29 days')::date, 'YYYY-MM-DD') AS f,
+          to_char((now()::date)::date, 'YYYY-MM-DD') AS t
+      `);
+
       fromSql = String(q.rows[0].f);
       toSql = String(q.rows[0].t);
     }
 
-    // ✅ 1) placements: берём ТОЛЬКО active+approved (как тебе нужно)
-    // ✅ делаем TRIM/LOWER чтобы не попасть на пробелы/регистр
-    // ✅ приводим publisher_id к bigint для 100% совпадения типов
+    // 1) placements (чтобы показывались даже без stats)
     const plcQ = await pool.query(
       `
       SELECT
@@ -230,9 +221,9 @@ export async function getDashboard(req, res, next) {
         moderation_status,
         created_at
       FROM placements
-      WHERE publisher_id::bigint = $1::bigint
-        AND LOWER(TRIM(status)) = 'active'
-        AND LOWER(TRIM(moderation_status)) = 'approved'
+      WHERE publisher_id = $1
+        AND status = 'active'
+        AND moderation_status = 'approved'
       ORDER BY created_at DESC
       `,
       [publisherId]
@@ -250,7 +241,7 @@ export async function getDashboard(req, res, next) {
       });
     }
 
-    // ✅ 2) stats: у тебя placement_daily_stats сейчас пустая => будет 0, это нормально
+    // 2) stats
     const statsQ = await pool.query(
       `
       SELECT
@@ -258,10 +249,10 @@ export async function getDashboard(req, res, next) {
         COALESCE(SUM(impressions),0)::int AS impressions,
         COALESCE(SUM(income_usd),0)::numeric(12,6) AS income_usd
       FROM placement_daily_stats
-      WHERE publisher_id::bigint = $1::bigint
+      WHERE publisher_id = $1
         AND placement_id = ANY($2::text[])
-        AND date_key >= to_date($3,'YYYY-MM-DD')
-        AND date_key <= to_date($4,'YYYY-MM-DD')
+        AND date_key >= $3::date
+        AND date_key <= $4::date
       GROUP BY placement_id
       `,
       [publisherId, ids, fromSql, toSql]
@@ -294,14 +285,8 @@ export async function getDashboard(req, res, next) {
       };
     });
 
-    const totalImps = placements.reduce(
-      (s, p) => s + (Number(p.impressions) || 0),
-      0
-    );
-    const totalIncome = placements.reduce(
-      (s, p) => s + (Number(p.income_usd) || 0),
-      0
-    );
+    const totalImps = placements.reduce((s, p) => s + (Number(p.impressions) || 0), 0);
+    const totalIncome = placements.reduce((s, p) => s + (Number(p.income_usd) || 0), 0);
     const totalCpm = totalImps > 0 ? (totalIncome / totalImps) * 1000 : 0;
 
     return res.json({
@@ -380,9 +365,7 @@ export async function createPlacement(req, res, next) {
       });
     }
 
-    const keyRes = await pool.query(
-      `SELECT api_key FROM api_keys WHERE status = 'active' LIMIT 1`
-    );
+    const keyRes = await pool.query(`SELECT api_key FROM api_keys WHERE status = 'active' LIMIT 1`);
     if (!keyRes.rowCount) {
       return res.status(500).json({ error: "No active api_key found" });
     }
@@ -429,9 +412,7 @@ export async function submitPlacement(req, res, next) {
     );
 
     if (!r.rowCount) {
-      return res
-        .status(404)
-        .json({ error: "Placement not found or cannot be submitted" });
+      return res.status(404).json({ error: "Placement not found or cannot be submitted" });
     }
 
     res.json({ success: true, placement: r.rows[0] });
@@ -568,9 +549,7 @@ export async function getSdkScript(req, res, next) {
 
     const p = r.rows[0];
 
-    const sdkUrl =
-      process.env.TOWERADS_SDK_URL ||
-      "https://portal.yourdomain.com/sdk/tower-ads-v4.js";
+    const sdkUrl = process.env.TOWERADS_SDK_URL || "https://portal.yourdomain.com/sdk/tower-ads-v4.js";
 
     const script = `<!-- TowerAds Unified SDK -->
 <script>
@@ -600,10 +579,8 @@ export async function getSdkScript(req, res, next) {
   }
 }
 
-// =========================
-// ✅ ALIASES FOR ROUTES
-// =========================
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
 export const publisherDashboard = getDashboard;
+
