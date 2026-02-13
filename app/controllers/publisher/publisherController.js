@@ -176,7 +176,7 @@ export async function getDaily(req, res, next) {
 }
 
 // =========================
-// DASHBOARD (ACTIVE APPROVED PLACEMENTS + PERIOD STATS)
+// DASHBOARD (ACTIVE APPROVED PLACEMENTS + PERIOD STATS) ✅ FIXED
 // =========================
 export async function getDashboard(req, res, next) {
   try {
@@ -201,60 +201,97 @@ export async function getDashboard(req, res, next) {
 
     if (!fromSql || !toSql) {
       const q = await pool.query(
-        `select (now()::date - interval '29 days')::date as f, (now()::date)::date as t`
+        `select (now()::date - interval '29 days')::date as f,
+                (now()::date)::date as t`
       );
       fromSql = String(q.rows[0].f);
       toSql = String(q.rows[0].t);
     }
 
-    const listQ = await pool.query(
+    // 1) сначала берём placements (чтобы они показывались даже без stats)
+    const plcQ = await pool.query(
       `
       SELECT
-        p.id,
-        p.name,
-        p.domain,
-        p.ad_type,
-        p.status,
-        p.moderation_status,
-        p.created_at,
-        COALESCE(SUM(s.impressions),0)::int AS impressions,
-        COALESCE(SUM(s.income_usd),0)::numeric(12,6) AS income_usd
-      FROM placements p
-      LEFT JOIN placement_daily_stats s
-        ON s.placement_id = p.id
-       AND s.publisher_id = p.publisher_id::bigint
-       AND s.date_key >= $2::date
-       AND s.date_key <= $3::date
-      WHERE p.publisher_id = $1
-        AND p.status = 'active'
-        AND p.moderation_status = 'approved'
-      GROUP BY
-        p.id, p.name, p.domain, p.ad_type, p.status, p.moderation_status, p.created_at
-      ORDER BY p.created_at DESC
+        id,
+        name,
+        domain,
+        ad_type,
+        status,
+        moderation_status,
+        created_at
+      FROM placements
+      WHERE publisher_id = $1
+        AND status = 'active'
+        AND moderation_status = 'approved'
+      ORDER BY created_at DESC
       `,
-      [publisherId, fromSql, toSql]
+      [publisherId]
     );
 
-    const placements = listQ.rows.map((r) => {
-      const imps = Number(r.impressions || 0);
-      const income = num(r.income_usd || 0);
+    const ids = plcQ.rows.map((r) => String(r.id));
+
+    if (ids.length === 0) {
+      return res.json({
+        publisher_id: publisherId,
+        from: fromSql,
+        to: toSql,
+        totals: { impressions: 0, income_usd: 0, cpm: 0 },
+        placements: [],
+      });
+    }
+
+    // 2) потом берём статистику из placement_daily_stats
+    const statsQ = await pool.query(
+      `
+      SELECT
+        placement_id,
+        COALESCE(SUM(impressions),0)::int AS impressions,
+        COALESCE(SUM(income_usd),0)::numeric(12,6) AS income_usd
+      FROM placement_daily_stats
+      WHERE publisher_id = $1
+        AND placement_id = ANY($2::text[])
+        AND date_key >= $3::date
+        AND date_key <= $4::date
+      GROUP BY placement_id
+      `,
+      [publisherId, ids, fromSql, toSql]
+    );
+
+    const statsMap = new Map();
+    for (const r of statsQ.rows) {
+      statsMap.set(String(r.placement_id), {
+        impressions: Number(r.impressions || 0),
+        income_usd: num(r.income_usd || 0),
+      });
+    }
+
+    const placements = plcQ.rows.map((p) => {
+      const st = statsMap.get(String(p.id)) || { impressions: 0, income_usd: 0 };
+      const imps = Number(st.impressions || 0);
+      const income = num(st.income_usd || 0);
       const cpm = imps > 0 ? (income / imps) * 1000 : 0;
 
       return {
-        id: String(r.id),
-        name: String(r.name || ""),
-        domain: r.domain ? String(r.domain) : null,
-        ad_type: String(r.ad_type || ""),
-        status: String(r.status || ""),
-        moderation_status: String(r.moderation_status || ""),
+        id: String(p.id),
+        name: String(p.name || ""),
+        domain: p.domain ? String(p.domain) : null,
+        ad_type: String(p.ad_type || ""),
+        status: String(p.status || ""),
+        moderation_status: String(p.moderation_status || ""),
         impressions: imps,
         income_usd: Number(income.toFixed(6)),
         cpm: Number(cpm.toFixed(6)),
       };
     });
 
-    const totalImps = placements.reduce((s, p) => s + (Number(p.impressions) || 0), 0);
-    const totalIncome = placements.reduce((s, p) => s + (Number(p.income_usd) || 0), 0);
+    const totalImps = placements.reduce(
+      (s, p) => s + (Number(p.impressions) || 0),
+      0
+    );
+    const totalIncome = placements.reduce(
+      (s, p) => s + (Number(p.income_usd) || 0),
+      0
+    );
     const totalCpm = totalImps > 0 ? (totalIncome / totalImps) * 1000 : 0;
 
     return res.json({
@@ -557,6 +594,7 @@ export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
 export const publisherDashboard = getDashboard;
+
 
 
 
