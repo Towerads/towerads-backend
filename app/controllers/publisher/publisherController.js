@@ -6,6 +6,7 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+// ✅ минимальный хелпер, чтобы не падать если req.publisher не задан
 function getPublisherId(req) {
   return req?.publisher?.publisherId ?? null;
 }
@@ -32,11 +33,6 @@ function toYMD(v) {
 export async function getSummary(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
-
-  console.log("🔥 DASHBOARD HIT");
-  console.log("RAW:", req.query.from, req.query.to);
-  console.log("YMD:", fromQ, toQ);
-
 
     if (!publisherId) {
       return res.json({
@@ -66,6 +62,7 @@ export async function getSummary(req, res, next) {
       [publisherId]
     );
 
+    // ✅ По ТЗ: цифры/стата должны идти из дневной агрегации
     const stats30 = await pool.query(
       `
       SELECT
@@ -84,7 +81,7 @@ export async function getSummary(req, res, next) {
     const avgCpmNet30 =
       impressions30 > 0 ? (income30 / impressions30) * 1000 : 0;
 
-    res.json({
+    return res.json({
       publisher_id: publisherId,
       balance: {
         frozen_usd: num(bal.rows[0]?.frozen_usd),
@@ -101,16 +98,18 @@ export async function getSummary(req, res, next) {
 }
 
 // =========================
-// DAILY
+// DAILY (ПО ТЗ: из placement_daily_stats)
 // =========================
 export async function getDaily(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
 
+    // ✅ фильтр по доске
     const placementId = String(req.query.placement_id || "").trim() || null;
 
-    const from = toYMD(req.query.from); // ✅
-    const to = toYMD(req.query.to); // ✅
+    // ✅ диапазон дат (приоритетнее days)
+    const from = toYMD(req.query.from);
+    const to = toYMD(req.query.to);
 
     const daysParam = String(req.query.days || "30").toLowerCase();
     const isAll = daysParam === "all";
@@ -137,12 +136,16 @@ export async function getDaily(req, res, next) {
       where += ` AND placement_id = $${params.length}`;
     }
 
+    // ✅ если указан диапазон — используем его
     if (from && to) {
       params.push(from, to);
       where += ` AND date_key >= $${params.length - 1}::date AND date_key <= $${params.length}::date`;
     } else if (days !== null) {
       params.push(days);
+      // последние N дней включая сегодня
       where += ` AND date_key >= (now()::date - ($${params.length}::int - 1))`;
+    } else {
+      // all — без ограничения
     }
 
     const r = await pool.query(
@@ -181,14 +184,14 @@ export async function getDaily(req, res, next) {
 }
 
 // =========================
-// DASHBOARD (ACTIVE APPROVED PLACEMENTS + PERIOD STATS) ✅ FIXED
+// DASHBOARD (ACTIVE APPROVED PLACEMENTS + PERIOD STATS) ✅ HARD FIX
 // =========================
 export async function getDashboard(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
 
-    const fromQ = toYMD(req.query.from); // ✅
-    const toQ = toYMD(req.query.to); // ✅
+    const fromQ = toYMD(req.query.from);
+    const toQ = toYMD(req.query.to);
 
     if (!publisherId) {
       return res.json({
@@ -213,7 +216,9 @@ export async function getDashboard(req, res, next) {
       toSql = String(q.rows[0].t);
     }
 
-    // 1) сначала берём placements (чтобы они показывались даже без stats)
+    // ✅ 1) placements: берём ТОЛЬКО active+approved (как тебе нужно)
+    // ✅ делаем TRIM/LOWER чтобы не попасть на пробелы/регистр
+    // ✅ приводим publisher_id к bigint для 100% совпадения типов
     const plcQ = await pool.query(
       `
       SELECT
@@ -225,9 +230,9 @@ export async function getDashboard(req, res, next) {
         moderation_status,
         created_at
       FROM placements
-      WHERE publisher_id = $1
-        AND status = 'active'
-        AND moderation_status = 'approved'
+      WHERE publisher_id::bigint = $1::bigint
+        AND LOWER(TRIM(status)) = 'active'
+        AND LOWER(TRIM(moderation_status)) = 'approved'
       ORDER BY created_at DESC
       `,
       [publisherId]
@@ -245,7 +250,7 @@ export async function getDashboard(req, res, next) {
       });
     }
 
-    // 2) потом берём статистику из placement_daily_stats
+    // ✅ 2) stats: у тебя placement_daily_stats сейчас пустая => будет 0, это нормально
     const statsQ = await pool.query(
       `
       SELECT
@@ -253,7 +258,7 @@ export async function getDashboard(req, res, next) {
         COALESCE(SUM(impressions),0)::int AS impressions,
         COALESCE(SUM(income_usd),0)::numeric(12,6) AS income_usd
       FROM placement_daily_stats
-      WHERE publisher_id = $1
+      WHERE publisher_id::bigint = $1::bigint
         AND placement_id = ANY($2::text[])
         AND date_key >= to_date($3,'YYYY-MM-DD')
         AND date_key <= to_date($4,'YYYY-MM-DD')
@@ -595,11 +600,10 @@ export async function getSdkScript(req, res, next) {
   }
 }
 
+// =========================
+// ✅ ALIASES FOR ROUTES
+// =========================
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
 export const publisherDashboard = getDashboard;
-
-
-
-
