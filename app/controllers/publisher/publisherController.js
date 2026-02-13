@@ -6,9 +6,24 @@ function num(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-// ✅ минимальный хелпер, чтобы не падать если req.publisher не задан
 function getPublisherId(req) {
   return req?.publisher?.publisherId ?? null;
+}
+
+// ✅ принимает YYYY-MM-DD или любые Date-строки и приводит к YYYY-MM-DD
+function toYMD(v) {
+  const s = String(v || "").trim();
+  if (!s) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
 }
 
 // =========================
@@ -81,7 +96,7 @@ export async function getSummary(req, res, next) {
 }
 
 // =========================
-// DAILY (ПО ТЗ: из placement_daily_stats)
+// DAILY
 // =========================
 export async function getDaily(req, res, next) {
   try {
@@ -89,8 +104,8 @@ export async function getDaily(req, res, next) {
 
     const placementId = String(req.query.placement_id || "").trim() || null;
 
-    const from = String(req.query.from || "").trim(); // YYYY-MM-DD
-    const to = String(req.query.to || "").trim(); // YYYY-MM-DD
+    const from = toYMD(req.query.from); // ✅
+    const to = toYMD(req.query.to); // ✅
 
     const daysParam = String(req.query.days || "30").toLowerCase();
     const isAll = daysParam === "all";
@@ -161,28 +176,28 @@ export async function getDaily(req, res, next) {
 }
 
 // =========================
-// DASHBOARD (LIST ACTIVE PLACEMENTS + STATS BY PERIOD + TOTALS)
+// DASHBOARD (ACTIVE APPROVED PLACEMENTS + PERIOD STATS)
 // =========================
 export async function getDashboard(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
 
-    const from = String(req.query.from || "").trim(); // YYYY-MM-DD
-    const to = String(req.query.to || "").trim(); // YYYY-MM-DD
+    const fromQ = toYMD(req.query.from); // ✅
+    const toQ = toYMD(req.query.to); // ✅
 
     if (!publisherId) {
       return res.json({
         publisher_id: null,
-        from: from || null,
-        to: to || null,
+        from: fromQ || null,
+        to: toQ || null,
         totals: { impressions: 0, income_usd: 0, cpm: 0 },
         placements: [],
       });
     }
 
-    // default period = last 30 days (как было)
-    let fromSql = from;
-    let toSql = to;
+    // default period = last 30 days
+    let fromSql = fromQ;
+    let toSql = toQ;
 
     if (!fromSql || !toSql) {
       const q = await pool.query(
@@ -192,9 +207,6 @@ export async function getDashboard(req, res, next) {
       toSql = String(q.rows[0].t);
     }
 
-    // Список активных APPROVED досок + стата за период
-    // placements.publisher_id = integer, placement_daily_stats.publisher_id = bigint
-    // поэтому сравнение: p.publisher_id::bigint = s.publisher_id
     const listQ = await pool.query(
       `
       SELECT
@@ -241,7 +253,6 @@ export async function getDashboard(req, res, next) {
       };
     });
 
-    // totals = сумма по всем placements (уже отфильтрованы active+approved)
     const totalImps = placements.reduce((s, p) => s + (Number(p.impressions) || 0), 0);
     const totalIncome = placements.reduce((s, p) => s + (Number(p.income_usd) || 0), 0);
     const totalCpm = totalImps > 0 ? (totalIncome / totalImps) * 1000 : 0;
@@ -542,9 +553,6 @@ export async function getSdkScript(req, res, next) {
   }
 }
 
-// =========================
-// ✅ ALIASES FOR ROUTES
-// =========================
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
