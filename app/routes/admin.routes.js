@@ -122,10 +122,23 @@ router.post(
 );
 
 // ===================
+// ===================
 // STATS
 // ===================
 router.get("/admin/stats", stats.adminStats);
 router.get("/admin/stats/providers", stats.adminStatsProviders);
+
+// ✅ NEW daily endpoints (по дням, отсечка 03:00 МСК)
+router.get(
+  "/admin/stats/providers/daily",
+  pickOr501(stats, ["adminStatsProvidersDaily"])
+);
+
+router.get(
+  "/admin/stats/placements/daily",
+  pickOr501(stats, ["adminStatsPlacementsDaily"])
+);
+
 
 // ===================
 // EARNINGS (manual jobs for MVP)
