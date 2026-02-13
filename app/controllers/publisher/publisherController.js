@@ -1,4 +1,3 @@
-// towerads-backend/app/controllers/publisher/publisherController.js
 import { pool } from "../../config/db.js";
 import crypto from "crypto";
 
@@ -19,7 +18,6 @@ export async function getSummary(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
 
-    // ✅ не падаем, если middleware не проставил publisher
     if (!publisherId) {
       return res.json({
         publisher_id: null,
@@ -48,8 +46,6 @@ export async function getSummary(req, res, next) {
       [publisherId]
     );
 
-    // ✅ По ТЗ: цифры/стата должны идти из дневной агрегации
-    // impressions_30d и avg_cpm_net_30d считаем из placement_daily_stats
     const stats30 = await pool.query(
       `
       SELECT
@@ -65,8 +61,6 @@ export async function getSummary(req, res, next) {
     const impressions30 = Number(stats30.rows[0]?.impressions_30d || 0);
     const income30 = num(stats30.rows[0]?.income_30d || 0);
 
-    // ✅ единая математика:
-    // cpm = income / impressions * 1000 (если impressions > 0)
     const avgCpmNet30 =
       impressions30 > 0 ? (income30 / impressions30) * 1000 : 0;
 
@@ -93,12 +87,10 @@ export async function getDaily(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
 
-    // ✅ фильтр по доске
     const placementId = String(req.query.placement_id || "").trim() || null;
 
-    // ✅ диапазон дат (приоритетнее days)
-    const from = String(req.query.from || "").trim(); // YYYY-MM-DD
-    const to = String(req.query.to || "").trim(); // YYYY-MM-DD
+    const from = String(req.query.from || "").trim();
+    const to = String(req.query.to || "").trim();
 
     const daysParam = String(req.query.days || "30").toLowerCase();
     const isAll = daysParam === "all";
@@ -125,16 +117,12 @@ export async function getDaily(req, res, next) {
       where += ` AND placement_id = $${params.length}`;
     }
 
-    // ✅ если указан диапазон — используем его
     if (from && to) {
       params.push(from, to);
       where += ` AND date_key >= $${params.length - 1}::date AND date_key <= $${params.length}::date`;
     } else if (days !== null) {
       params.push(days);
-      // последние N дней включая сегодня (date_key)
       where += ` AND date_key >= (now()::date - ($${params.length}::int - 1))`;
-    } else {
-      // all — без ограничения
     }
 
     const r = await pool.query(
@@ -173,7 +161,7 @@ export async function getDaily(req, res, next) {
 }
 
 // =========================
-// DASHBOARD CARDS (ALL ACTIVE+APPROVED PLACEMENTS, PERIOD by from/to)
+// DASHBOARD (ALL ACTIVE+APPROVED PLACEMENTS, PERIOD from/to)
 // =========================
 export async function getDashboard(req, res, next) {
   try {
@@ -193,7 +181,7 @@ export async function getDashboard(req, res, next) {
       });
     }
 
-    // если период не передали — по умолчанию последние 30 дней
+    // default period = last 30 days
     let fromSql = from;
     let toSql = to;
 
@@ -205,7 +193,7 @@ export async function getDashboard(req, res, next) {
       toSql = String(q.rows[0].t);
     }
 
-    // сегодня/вчера по МСК (для date_key)
+    // today/yesterday in MSK (если date_key режется по МСК)
     const msk = await pool.query(
       `select (now() at time zone 'Europe/Moscow')::date as today_msk,
               ((now() at time zone 'Europe/Moscow')::date - interval '1 day')::date as y_msk`
@@ -213,7 +201,9 @@ export async function getDashboard(req, res, next) {
     const todayMsk = String(msk.rows[0].today_msk);
     const yMsk = String(msk.rows[0].y_msk);
 
-    // TOTAL за период (по всем active+approved placements)
+    // ВАЖНО: placements.publisher_id = integer, placement_daily_stats.publisher_id = bigint
+    // Поэтому сравниваем так: p.publisher_id::bigint = s.publisher_id
+
     const totalQ = await pool.query(
       `
       SELECT
@@ -222,7 +212,7 @@ export async function getDashboard(req, res, next) {
       FROM placement_daily_stats s
       JOIN placements p ON p.id = s.placement_id
       WHERE s.publisher_id = $1
-        AND p.publisher_id = $1
+        AND p.publisher_id::bigint = s.publisher_id
         AND p.status = 'active'
         AND p.moderation_status = 'approved'
         AND s.date_key >= $2::date
@@ -235,7 +225,6 @@ export async function getDashboard(req, res, next) {
     const totalIncome = num(totalQ.rows[0]?.income_usd || 0);
     const totalCpm = totalImps > 0 ? (totalIncome / totalImps) * 1000 : 0;
 
-    // TODAY
     const todayQ = await pool.query(
       `
       SELECT
@@ -244,7 +233,7 @@ export async function getDashboard(req, res, next) {
       FROM placement_daily_stats s
       JOIN placements p ON p.id = s.placement_id
       WHERE s.publisher_id = $1
-        AND p.publisher_id = $1
+        AND p.publisher_id::bigint = s.publisher_id
         AND p.status = 'active'
         AND p.moderation_status = 'approved'
         AND s.date_key = $2::date
@@ -256,7 +245,6 @@ export async function getDashboard(req, res, next) {
     const todayIncome = num(todayQ.rows[0]?.income_usd || 0);
     const todayCpm = todayImps > 0 ? (todayIncome / todayImps) * 1000 : 0;
 
-    // YESTERDAY
     const yQ = await pool.query(
       `
       SELECT
@@ -265,7 +253,7 @@ export async function getDashboard(req, res, next) {
       FROM placement_daily_stats s
       JOIN placements p ON p.id = s.placement_id
       WHERE s.publisher_id = $1
-        AND p.publisher_id = $1
+        AND p.publisher_id::bigint = s.publisher_id
         AND p.status = 'active'
         AND p.moderation_status = 'approved'
         AND s.date_key = $2::date
@@ -502,7 +490,7 @@ export async function getProvidersStats(req, res, next) {
 }
 
 // =========================
-// SDK SCRIPT (TMA) — строго по ТЗ
+// SDK SCRIPT (TMA)
 // =========================
 export async function getSdkScript(req, res, next) {
   try {
@@ -511,7 +499,6 @@ export async function getSdkScript(req, res, next) {
       return res.status(401).json({ error: "Publisher not identified" });
     }
 
-    // ✅ placement_id НЕ обязателен по ТЗ
     const placementIdRaw = String(req.query.placement_id || "").trim();
     const placementId = placementIdRaw ? placementIdRaw : null;
 
@@ -545,7 +532,6 @@ export async function getSdkScript(req, res, next) {
       );
     }
 
-    // ✅ выдаём только после approve
     if (!r.rowCount) {
       return res.status(404).json({ error: "NO_APPROVED_PLACEMENT" });
     }
@@ -585,10 +571,11 @@ export async function getSdkScript(req, res, next) {
 }
 
 // =========================
-// ✅ ALIASES FOR ROUTES (FIX)
+// ✅ ALIASES FOR ROUTES
 // =========================
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
 export const publisherDashboard = getDashboard;
+
 
