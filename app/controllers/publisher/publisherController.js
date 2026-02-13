@@ -96,9 +96,16 @@ export async function getSummary(req, res, next) {
 // =========================
 // DAILY
 // =========================
+// =========================
+// DAILY
+// =========================
 export async function getDaily(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
+
+    // ✅ диапазон дат (приоритетнее days)
+    const from = String(req.query.from || "").trim(); // YYYY-MM-DD
+    const to = String(req.query.to || "").trim();     // YYYY-MM-DD
 
     const daysParam = String(req.query.days || "30").toLowerCase();
     const isAll = daysParam === "all";
@@ -107,11 +114,37 @@ export async function getDaily(req, res, next) {
       ? null
       : Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
 
-    // ✅ не падаем, если middleware не проставил publisher
     if (!publisherId) {
-      return res.json({ days: isAll ? "all" : days, rows: [] });
+      return res.json({ from: from || null, to: to || null, days: isAll ? "all" : days, rows: [] });
     }
 
+    // ✅ если указан диапазон — используем его
+    if (from && to) {
+      const r = await pool.query(
+        `
+        SELECT
+          (meta->>'day') AS day,
+          SUM((meta->>'impressions')::int) AS impressions,
+          SUM((meta->>'gross_usd')::numeric) AS gross_usd,
+          SUM(amount_usd)::numeric(12,6) AS net_usd,
+          MIN(available_at) AS available_at,
+          CASE WHEN MIN(available_at) <= now() THEN 'available' ELSE 'frozen' END AS bucket
+        FROM publisher_ledger
+        WHERE publisher_id=$1
+          AND entry_type='EARN_NET_FROZEN'
+          AND status IN ('posted','settled')
+          AND (meta->>'day') >= $2
+          AND (meta->>'day') <= $3
+        GROUP BY (meta->>'day')
+        ORDER BY (meta->>'day') DESC
+        `,
+        [publisherId, from, to]
+      );
+
+      return res.json({ from, to, rows: r.rows });
+    }
+
+    // ✅ иначе старая логика days
     const r = await pool.query(
       `
       SELECT
@@ -132,11 +165,12 @@ export async function getDaily(req, res, next) {
       [publisherId, days]
     );
 
-    res.json({ days: isAll ? "all" : days, rows: r.rows });
+    return res.json({ days: isAll ? "all" : days, rows: r.rows });
   } catch (e) {
     next(e);
   }
 }
+
 
 // =========================
 // PLACEMENTS
