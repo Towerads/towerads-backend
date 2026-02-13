@@ -1,11 +1,11 @@
 // towerads-backend/scripts/accrueDailyEarnings.js
-const { accrueDailyEarnings } = require("../app/services/earningsService");
+import { accrueDailyEarnings } from "../app/services/earningsService.js";
 
-// ENV настройки (можешь вынести в app/config/env.js)
 const REVSHARE = process.env.REVSHARE ? Number(process.env.REVSHARE) : 0.7;
 const FREEZE_DAYS = process.env.FREEZE_DAYS ? Number(process.env.FREEZE_DAYS) : 5;
 
 // По умолчанию начисляем за "вчера" (UTC)
+// ✅ Это и есть "день по МСК с границей 03:00", потому что 03:00 МСК == 00:00 UTC
 function yesterdayUTCKey() {
   const now = new Date();
   const y = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));

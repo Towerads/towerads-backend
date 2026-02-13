@@ -1,3 +1,4 @@
+// towerads-backend/app/controllers/admin/statsController.js
 import { pool } from "../../config/db.js";
 
 // --------------------
@@ -31,7 +32,8 @@ export async function adminStats(req, res) {
 // --------------------
 // PROVIDERS STATS (ПО ТЗ)
 // attempts = из impression_attempts
-// revenue/cost = из impressions по served_provider (чтобы не умножалось на attempts)
+// revenue/cost = из impressions по served_provider
+// ✅ ВАЖНО: фильтр периода должен применяться И к attempts, И к impressions
 // --------------------
 export async function adminStatsProviders(req, res) {
   try {
@@ -40,6 +42,7 @@ export async function adminStatsProviders(req, res) {
     let whereSql = "";
     const params = [];
 
+    // где-фильтр для attempts (ia)
     if (from && to) {
       params.push(from, to);
       whereSql = `
@@ -47,10 +50,28 @@ export async function adminStatsProviders(req, res) {
         AND ia.created_at < ($2::date + interval '1 day')
       `;
     } else {
+      // today / 7d / 30d
       let interval = "1 day";
       if (period === "7d") interval = "7 days";
       if (period === "30d") interval = "30 days";
+
       whereSql = `ia.created_at >= now() - interval '${interval}'`;
+    }
+
+    // ✅ тот же фильтр, но для impressions (i)
+    // если from/to -> используем те же $1/$2
+    // если period -> тот же interval
+    let whereImpsSql = "";
+    if (from && to) {
+      whereImpsSql = `
+        i.created_at >= $1::date
+        AND i.created_at < ($2::date + interval '1 day')
+      `;
+    } else {
+      let interval = "1 day";
+      if (period === "7d") interval = "7 days";
+      if (period === "30d") interval = "30 days";
+      whereImpsSql = `i.created_at >= now() - interval '${interval}'`;
     }
 
     const r = await pool.query(
@@ -76,6 +97,7 @@ export async function adminStatsProviders(req, res) {
         WHERE i.served_provider IS NOT NULL
           AND i.status IN ('impression','completed','clicked')
           AND i.source = 'tower'
+          AND ${whereImpsSql}
         GROUP BY i.served_provider
       )
       SELECT
@@ -91,8 +113,8 @@ export async function adminStatsProviders(req, res) {
 
         CASE
           WHEN COALESCE(w.impressions, 0) = 0 THEN 0
-          ELSE (COALESCE(w.revenue, 0) / COALESCE(w.impressions, 0)) * 1000
-        END::numeric(12,2) AS cpm
+          ELSE ROUND((COALESCE(w.revenue, 0) / COALESCE(w.impressions, 0)) * 1000, 6)
+        END AS cpm
 
       FROM attempts a
       LEFT JOIN wins w ON w.provider = a.provider
