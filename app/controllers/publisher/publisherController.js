@@ -33,6 +33,11 @@ export async function getSummary(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
 
+  console.log("🔥 DASHBOARD HIT");
+  console.log("RAW:", req.query.from, req.query.to);
+  console.log("YMD:", fromQ, toQ);
+
+
     if (!publisherId) {
       return res.json({
         publisher_id: null,
@@ -250,8 +255,8 @@ export async function getDashboard(req, res, next) {
       FROM placement_daily_stats
       WHERE publisher_id = $1
         AND placement_id = ANY($2::text[])
-        AND date_key >= $3::date
-        AND date_key <= $4::date
+        AND date_key >= to_date($3,'YYYY-MM-DD')
+        AND date_key <= to_date($4,'YYYY-MM-DD')
       GROUP BY placement_id
       `,
       [publisherId, ids, fromSql, toSql]
