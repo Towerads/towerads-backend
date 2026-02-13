@@ -7,6 +7,7 @@ import {
   submitPlacement,
   publisherProvidersStats,
   getSdkScript,
+  publisherDashboard,
 } from "../controllers/publisher/publisherController.js";
 
 import { requireTelegramUser } from "../middlewares/requireTelegramUser.js";
@@ -25,14 +26,16 @@ router.use(requirePublisher);
 /**
  * GET  /publisher/summary
  * GET  /publisher/daily
+ * GET  /publisher/dashboard   ✅ new
  * GET  /publisher/placements
- * POST /publisher/placements             ✅ create placement
- * POST /publisher/placements/:id/submit  ✅ send to moderation
+ * POST /publisher/placements
+ * POST /publisher/placements/:id/submit
  * GET  /publisher/providers/stats
  * GET  /publisher/sdk-script
  */
 router.get("/summary", publisherSummary);
 router.get("/daily", publisherDaily);
+router.get("/dashboard", publisherDashboard);
 
 router.get("/placements", listPlacements);
 router.post("/placements", createPlacement);
@@ -43,3 +46,4 @@ router.get("/sdk-script", getSdkScript);
 
 export default router;
 export { router };
+

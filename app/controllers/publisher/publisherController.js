@@ -151,8 +151,6 @@ export async function getDaily(req, res, next) {
       params
     );
 
-    // bucket/available_at по ТЗ не обязательны для P0 статистики
-    // (это про выплаты/заморозку, она в balances/ledger)
     const rows = r.rows.map((x) => ({
       day: x.day,
       impressions: Number(x.impressions || 0),
@@ -168,6 +166,136 @@ export async function getDaily(req, res, next) {
       days: from && to ? null : isAll ? "all" : days,
       placement_id: placementId,
       rows,
+    });
+  } catch (e) {
+    next(e);
+  }
+}
+
+// =========================
+// DASHBOARD CARDS (ALL ACTIVE+APPROVED PLACEMENTS, PERIOD by from/to)
+// =========================
+export async function getDashboard(req, res, next) {
+  try {
+    const publisherId = getPublisherId(req);
+
+    const from = String(req.query.from || "").trim(); // YYYY-MM-DD
+    const to = String(req.query.to || "").trim(); // YYYY-MM-DD
+
+    if (!publisherId) {
+      return res.json({
+        publisher_id: null,
+        from: from || null,
+        to: to || null,
+        totals: { impressions: 0, income_usd: 0, cpm: 0 },
+        today: { impressions: 0, income_usd: 0, cpm: 0 },
+        yesterday: { impressions: 0, income_usd: 0, cpm: 0 },
+      });
+    }
+
+    // если период не передали — по умолчанию последние 30 дней
+    let fromSql = from;
+    let toSql = to;
+
+    if (!fromSql || !toSql) {
+      const q = await pool.query(
+        `select (now()::date - interval '29 days')::date as f, (now()::date)::date as t`
+      );
+      fromSql = String(q.rows[0].f);
+      toSql = String(q.rows[0].t);
+    }
+
+    // сегодня/вчера по МСК (для date_key)
+    const msk = await pool.query(
+      `select (now() at time zone 'Europe/Moscow')::date as today_msk,
+              ((now() at time zone 'Europe/Moscow')::date - interval '1 day')::date as y_msk`
+    );
+    const todayMsk = String(msk.rows[0].today_msk);
+    const yMsk = String(msk.rows[0].y_msk);
+
+    // TOTAL за период (по всем active+approved placements)
+    const totalQ = await pool.query(
+      `
+      SELECT
+        COALESCE(SUM(s.impressions),0)::int AS impressions,
+        COALESCE(SUM(s.income_usd),0)::numeric(12,6) AS income_usd
+      FROM placement_daily_stats s
+      JOIN placements p ON p.id = s.placement_id
+      WHERE s.publisher_id = $1
+        AND p.publisher_id = $1
+        AND p.status = 'active'
+        AND p.moderation_status = 'approved'
+        AND s.date_key >= $2::date
+        AND s.date_key <= $3::date
+      `,
+      [publisherId, fromSql, toSql]
+    );
+
+    const totalImps = Number(totalQ.rows[0]?.impressions || 0);
+    const totalIncome = num(totalQ.rows[0]?.income_usd || 0);
+    const totalCpm = totalImps > 0 ? (totalIncome / totalImps) * 1000 : 0;
+
+    // TODAY
+    const todayQ = await pool.query(
+      `
+      SELECT
+        COALESCE(SUM(s.impressions),0)::int AS impressions,
+        COALESCE(SUM(s.income_usd),0)::numeric(12,6) AS income_usd
+      FROM placement_daily_stats s
+      JOIN placements p ON p.id = s.placement_id
+      WHERE s.publisher_id = $1
+        AND p.publisher_id = $1
+        AND p.status = 'active'
+        AND p.moderation_status = 'approved'
+        AND s.date_key = $2::date
+      `,
+      [publisherId, todayMsk]
+    );
+
+    const todayImps = Number(todayQ.rows[0]?.impressions || 0);
+    const todayIncome = num(todayQ.rows[0]?.income_usd || 0);
+    const todayCpm = todayImps > 0 ? (todayIncome / todayImps) * 1000 : 0;
+
+    // YESTERDAY
+    const yQ = await pool.query(
+      `
+      SELECT
+        COALESCE(SUM(s.impressions),0)::int AS impressions,
+        COALESCE(SUM(s.income_usd),0)::numeric(12,6) AS income_usd
+      FROM placement_daily_stats s
+      JOIN placements p ON p.id = s.placement_id
+      WHERE s.publisher_id = $1
+        AND p.publisher_id = $1
+        AND p.status = 'active'
+        AND p.moderation_status = 'approved'
+        AND s.date_key = $2::date
+      `,
+      [publisherId, yMsk]
+    );
+
+    const yImps = Number(yQ.rows[0]?.impressions || 0);
+    const yIncome = num(yQ.rows[0]?.income_usd || 0);
+    const yCpm = yImps > 0 ? (yIncome / yImps) * 1000 : 0;
+
+    return res.json({
+      publisher_id: publisherId,
+      from: fromSql,
+      to: toSql,
+      totals: {
+        impressions: totalImps,
+        income_usd: Number(totalIncome.toFixed(6)),
+        cpm: Number(totalCpm.toFixed(6)),
+      },
+      today: {
+        impressions: todayImps,
+        income_usd: Number(todayIncome.toFixed(6)),
+        cpm: Number(todayCpm.toFixed(6)),
+      },
+      yesterday: {
+        impressions: yImps,
+        income_usd: Number(yIncome.toFixed(6)),
+        cpm: Number(yCpm.toFixed(6)),
+      },
     });
   } catch (e) {
     next(e);
@@ -462,3 +590,5 @@ export async function getSdkScript(req, res, next) {
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
+export const publisherDashboard = getDashboard;
+
