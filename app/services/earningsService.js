@@ -25,25 +25,111 @@ function toNumber(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function dayKey(dateObj) {
-  // YYYY-MM-DD (UTC)
-  const d = new Date(dateObj);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
+// ====== MSK helpers ======
+// МСК = UTC+3 (без DST)
+const MSK_OFFSET_MIN = 180;
+
+function pad2(x) {
+  return String(x).padStart(2, "0");
+}
+
+// YYYY-MM-DD из даты по МСК
+function mskDayKeyFromUtcDate(dateUtc) {
+  const d = new Date(dateUtc);
+  const msk = new Date(d.getTime() + MSK_OFFSET_MIN * 60 * 1000);
+
+  const y = msk.getUTCFullYear();
+  const m = pad2(msk.getUTCMonth() + 1);
+  const day = pad2(msk.getUTCDate());
   return `${y}-${m}-${day}`;
 }
 
-export async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 } = {}) {
+// В UTC-таймштамп начала МСК-дня (03:00 MSK) для date_key
+// date_key = YYYY-MM-DD (по МСК)
+// startUtc = date_key 00:00 MSK - 3h => date_key 21:00Z предыдущего дня
+function mskDayStartUtc(dateKey /* YYYY-MM-DD */) {
+  // берём "dateKeyT00:00:00Z" как опорную UTC-дату
+  // и сдвигаем на -3 часа, чтобы это было 00:00 MSK => 21:00Z предыдущего
+  const base = new Date(`${dateKey}T00:00:00.000Z`);
+  return new Date(base.getTime() - MSK_OFFSET_MIN * 60 * 1000);
+}
+
+function addDays(dateObj, days) {
+  return new Date(dateObj.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * accrueDailyEarnings
+ * day: YYYY-MM-DD (это МСК date_key!)
+ */
+export async function accrueDailyEarnings({
+  day,
+  revshare = 0.7,
+  freezeDays = 5,
+} = {}) {
   if (!day) throw new Error("accrueDailyEarnings: day is required");
 
-  const dayStart = new Date(`${typeof day === "string" ? day : dayKey(day)}T00:00:00.000Z`);
-  const nextDay = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+  // ✅ границы суток по ТЗ: 03:00 MSK -> 03:00 MSK
+  const dayStartUtc = mskDayStartUtc(String(day));
+  const nextDayUtc = addDays(dayStartUtc, 1);
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
+    // ====== 1) Собираем агрегацию по placements из impressions ======
+    // income_usd = SUM(revenue_usd) * revshare (net)
+    const agg = await client.query(
+      `
+      WITH agg AS (
+        SELECT
+          p.publisher_id,
+          i.placement_id,
+          COUNT(*)::int AS imps,
+          COALESCE(SUM(i.revenue_usd),0)::numeric AS gross_usd
+        FROM impressions i
+        JOIN placements p ON p.id = i.placement_id
+        WHERE p.moderation_status='approved'
+          AND i.is_fraud=false
+          AND i.status IN ('impression','completed')
+          AND i.created_at >= $1
+          AND i.created_at <  $2
+        GROUP BY 1,2
+      )
+      SELECT *
+      FROM agg
+      WHERE imps > 0
+      `,
+      [dayStartUtc.toISOString(), nextDayUtc.toISOString()]
+    );
+
+    // ====== 2) Апсерчим дневную таблицу placement_daily_stats (по ТЗ) ======
+    // Храним net income (income_usd) и impressions.
+    for (const r of agg.rows) {
+      const publisherId = r.publisher_id;
+      const placementId = r.placement_id;
+      const imps = Number(r.imps) || 0;
+      const grossUsd = toNumber(r.gross_usd);
+      const netUsd = Number((grossUsd * revshare).toFixed(6));
+
+      await client.query(
+        `
+        INSERT INTO placement_daily_stats
+          (date_key, placement_id, publisher_id, impressions, income_usd, updated_at)
+        VALUES
+          ($1::date, $2, $3, $4, $5, now())
+        ON CONFLICT (date_key, placement_id)
+        DO UPDATE SET
+          publisher_id = EXCLUDED.publisher_id,
+          impressions  = EXCLUDED.impressions,
+          income_usd   = EXCLUDED.income_usd,
+          updated_at   = now()
+        `,
+        [day, placementId, publisherId, imps, netUsd]
+      );
+    }
+
+    // ====== 3) Пишем ledger (твоя логика, но day/meta теперь по МСК) ======
     const q = await client.query(
       `
       WITH agg AS (
@@ -93,7 +179,13 @@ export async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 
         COALESCE(SUM(amount_usd),0)::numeric AS total_net
       FROM ins;
       `,
-      [dayStart.toISOString(), nextDay.toISOString(), revshare, freezeDays, dayKey(dayStart)]
+      [
+        dayStartUtc.toISOString(),
+        nextDayUtc.toISOString(),
+        revshare,
+        freezeDays,
+        String(day),
+      ]
     );
 
     const inserted = q.rows[0]?.inserted ?? 0;
@@ -123,7 +215,7 @@ export async function accrueDailyEarnings({ day, revshare = 0.7, freezeDays = 5 
         FROM addm
         WHERE b.publisher_id = addm.publisher_id;
         `,
-        [dayKey(dayStart)]
+        [String(day)]
       );
     }
 
@@ -226,3 +318,4 @@ export async function unfreezeDueEarnings() {
     client.release();
   }
 }
+

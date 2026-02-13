@@ -48,34 +48,27 @@ export async function getSummary(req, res, next) {
       [publisherId]
     );
 
-    const impsRes = await pool.query(
+    // ✅ По ТЗ: цифры/стата должны идти из дневной агрегации
+    // impressions_30d и avg_cpm_net_30d считаем из placement_daily_stats
+    const stats30 = await pool.query(
       `
-      SELECT COUNT(*)::int AS impressions_30d
-      FROM impressions i
-      JOIN placements p ON p.id = i.placement_id
-      WHERE p.publisher_id=$1
-        AND p.moderation_status='approved'
-        AND i.is_fraud=false
-        AND i.status IN ('impression','completed')
-        AND i.created_at >= now() - interval '30 days'
+      SELECT
+        COALESCE(SUM(impressions),0)::int AS impressions_30d,
+        COALESCE(SUM(income_usd),0)::numeric(12,6) AS income_30d
+      FROM placement_daily_stats
+      WHERE publisher_id = $1
+        AND date_key >= (now()::date - interval '29 days')
       `,
       [publisherId]
     );
 
-    const cpmRes = await pool.query(
-      `
-      SELECT
-        CASE WHEN COALESCE(SUM((meta->>'impressions')::int),0) > 0
-          THEN ROUND((SUM(amount_usd) / SUM((meta->>'impressions')::int)) * 1000, 6)
-          ELSE 0 END AS avg_cpm_net_30d
-      FROM publisher_ledger
-      WHERE publisher_id=$1
-        AND entry_type='EARN_NET_FROZEN'
-        AND status IN ('posted','settled')
-        AND earned_at >= now() - interval '30 days'
-      `,
-      [publisherId]
-    );
+    const impressions30 = Number(stats30.rows[0]?.impressions_30d || 0);
+    const income30 = num(stats30.rows[0]?.income_30d || 0);
+
+    // ✅ единая математика:
+    // cpm = income / impressions * 1000 (если impressions > 0)
+    const avgCpmNet30 =
+      impressions30 > 0 ? (income30 / impressions30) * 1000 : 0;
 
     res.json({
       publisher_id: publisherId,
@@ -85,8 +78,8 @@ export async function getSummary(req, res, next) {
         locked_usd: num(bal.rows[0]?.locked_usd),
         updated_at: bal.rows[0]?.updated_at,
       },
-      impressions_30d: impsRes.rows[0]?.impressions_30d ?? 0,
-      avg_cpm_net_30d: num(cpmRes.rows[0]?.avg_cpm_net_30d),
+      impressions_30d: impressions30,
+      avg_cpm_net_30d: Number(avgCpmNet30.toFixed(6)),
     });
   } catch (e) {
     next(e);
@@ -94,18 +87,18 @@ export async function getSummary(req, res, next) {
 }
 
 // =========================
-// DAILY
-// =========================
-// =========================
-// DAILY
+// DAILY (ПО ТЗ: из placement_daily_stats)
 // =========================
 export async function getDaily(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
 
+    // ✅ фильтр по доске
+    const placementId = String(req.query.placement_id || "").trim() || null;
+
     // ✅ диапазон дат (приоритетнее days)
     const from = String(req.query.from || "").trim(); // YYYY-MM-DD
-    const to = String(req.query.to || "").trim();     // YYYY-MM-DD
+    const to = String(req.query.to || "").trim(); // YYYY-MM-DD
 
     const daysParam = String(req.query.days || "30").toLowerCase();
     const isAll = daysParam === "all";
@@ -115,62 +108,71 @@ export async function getDaily(req, res, next) {
       : Math.min(Math.max(Number.isFinite(daysRaw) ? daysRaw : 30, 1), 180);
 
     if (!publisherId) {
-      return res.json({ from: from || null, to: to || null, days: isAll ? "all" : days, rows: [] });
+      return res.json({
+        from: from || null,
+        to: to || null,
+        days: isAll ? "all" : days,
+        placement_id: placementId,
+        rows: [],
+      });
+    }
+
+    const params = [publisherId];
+    let where = `publisher_id = $1`;
+
+    if (placementId) {
+      params.push(placementId);
+      where += ` AND placement_id = $${params.length}`;
     }
 
     // ✅ если указан диапазон — используем его
     if (from && to) {
-      const r = await pool.query(
-        `
-        SELECT
-          (meta->>'day') AS day,
-          SUM((meta->>'impressions')::int) AS impressions,
-          SUM((meta->>'gross_usd')::numeric) AS gross_usd,
-          SUM(amount_usd)::numeric(12,6) AS net_usd,
-          MIN(available_at) AS available_at,
-          CASE WHEN MIN(available_at) <= now() THEN 'available' ELSE 'frozen' END AS bucket
-        FROM publisher_ledger
-        WHERE publisher_id=$1
-          AND entry_type='EARN_NET_FROZEN'
-          AND status IN ('posted','settled')
-          AND (meta->>'day') >= $2
-          AND (meta->>'day') <= $3
-        GROUP BY (meta->>'day')
-        ORDER BY (meta->>'day') DESC
-        `,
-        [publisherId, from, to]
-      );
-
-      return res.json({ from, to, rows: r.rows });
+      params.push(from, to);
+      where += ` AND date_key >= $${params.length - 1}::date AND date_key <= $${params.length}::date`;
+    } else if (days !== null) {
+      params.push(days);
+      // последние N дней включая сегодня (date_key)
+      where += ` AND date_key >= (now()::date - ($${params.length}::int - 1))`;
+    } else {
+      // all — без ограничения
     }
 
-    // ✅ иначе старая логика days
     const r = await pool.query(
       `
       SELECT
-        (meta->>'day') AS day,
-        SUM((meta->>'impressions')::int) AS impressions,
-        SUM((meta->>'gross_usd')::numeric) AS gross_usd,
-        SUM(amount_usd)::numeric(12,6) AS net_usd,
-        MIN(available_at) AS available_at,
-        CASE WHEN MIN(available_at) <= now() THEN 'available' ELSE 'frozen' END AS bucket
-      FROM publisher_ledger
-      WHERE publisher_id=$1
-        AND entry_type='EARN_NET_FROZEN'
-        AND status IN ('posted','settled')
-        AND ($2::int IS NULL OR earned_at >= now() - ($2 || ' days')::interval)
-      GROUP BY (meta->>'day')
-      ORDER BY (meta->>'day') DESC
+        date_key::text AS day,
+        SUM(impressions)::int AS impressions,
+        SUM(income_usd)::numeric(12,6) AS net_usd
+      FROM placement_daily_stats
+      WHERE ${where}
+      GROUP BY date_key
+      ORDER BY date_key DESC
       `,
-      [publisherId, days]
+      params
     );
 
-    return res.json({ days: isAll ? "all" : days, rows: r.rows });
+    // bucket/available_at по ТЗ не обязательны для P0 статистики
+    // (это про выплаты/заморозку, она в balances/ledger)
+    const rows = r.rows.map((x) => ({
+      day: x.day,
+      impressions: Number(x.impressions || 0),
+      gross_usd: "0",
+      net_usd: String(x.net_usd || "0"),
+      available_at: null,
+      bucket: "available",
+    }));
+
+    return res.json({
+      from: from || null,
+      to: to || null,
+      days: from && to ? null : isAll ? "all" : days,
+      placement_id: placementId,
+      rows,
+    });
   } catch (e) {
     next(e);
   }
 }
-
 
 // =========================
 // PLACEMENTS
@@ -460,7 +462,3 @@ export async function getSdkScript(req, res, next) {
 export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
-
-
-
-
