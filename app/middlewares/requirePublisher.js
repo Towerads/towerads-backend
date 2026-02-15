@@ -1,7 +1,5 @@
 import { pool } from "../config/db.js";
 
-const PUBLISHER_ID = 1; // общий кабинет на троих
-
 export default async function requirePublisher(req, res, next) {
   try {
     const tgUserId = req.tgUserId;
@@ -9,14 +7,17 @@ export default async function requirePublisher(req, res, next) {
       return res.status(401).json({ error: "Telegram user required" });
     }
 
+    // Берём publisher_id и роль по tg_user_id
+    // Если у пользователя есть доступ к нескольким publisher_id — пока берём первый.
     const r = await pool.query(
       `
-      select role
+      select publisher_id, role
       from publisher_members
-      where publisher_id = $1 and tg_user_id = $2
+      where tg_user_id = $1
+      order by publisher_id asc
       limit 1
       `,
-      [PUBLISHER_ID, String(tgUserId)]
+      [String(tgUserId)]
     );
 
     if (r.rowCount === 0) {
@@ -24,7 +25,7 @@ export default async function requirePublisher(req, res, next) {
     }
 
     req.publisher = {
-      publisherId: PUBLISHER_ID,
+      publisherId: Number(r.rows[0].publisher_id),
       role: r.rows[0].role,
     };
 
@@ -33,3 +34,4 @@ export default async function requirePublisher(req, res, next) {
     return next(err);
   }
 }
+
