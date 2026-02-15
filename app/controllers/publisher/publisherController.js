@@ -1,3 +1,4 @@
+// towards-backend/app/controllers/publisher/publisherController.js
 import { pool } from "../../config/db.js";
 import crypto from "crypto";
 
@@ -175,7 +176,7 @@ export async function getDaily(req, res, next) {
 }
 
 // =========================
-// DASHBOARD (ACTIVE APPROVED PLACEMENTS + PERIOD STATS) ✅ FIXED REAL
+// DASHBOARD (ACTIVE APPROVED PLACEMENTS + PERIOD STATS)
 // =========================
 export async function getDashboard(req, res, next) {
   try {
@@ -194,7 +195,7 @@ export async function getDashboard(req, res, next) {
       });
     }
 
-    // ✅ default period = last 30 days (СРАЗУ строками YYYY-MM-DD!)
+    // default period = last 30 days
     let fromSql = fromQ;
     let toSql = toQ;
 
@@ -209,7 +210,6 @@ export async function getDashboard(req, res, next) {
       toSql = String(q.rows[0].t);
     }
 
-    // 1) placements (чтобы показывались даже без stats)
     const plcQ = await pool.query(
       `
       SELECT
@@ -219,7 +219,8 @@ export async function getDashboard(req, res, next) {
         ad_type,
         status,
         moderation_status,
-        created_at
+        created_at,
+        category
       FROM placements
       WHERE publisher_id = $1
         AND status = 'active'
@@ -241,7 +242,6 @@ export async function getDashboard(req, res, next) {
       });
     }
 
-    // 2) stats
     const statsQ = await pool.query(
       `
       SELECT
@@ -279,6 +279,7 @@ export async function getDashboard(req, res, next) {
         ad_type: String(p.ad_type || ""),
         status: String(p.status || ""),
         moderation_status: String(p.moderation_status || ""),
+        category: p.category ? String(p.category) : null,
         impressions: imps,
         income_usd: Number(income.toFixed(6)),
         cpm: Number(cpm.toFixed(6)),
@@ -318,6 +319,12 @@ function pickAdType(v) {
   return null;
 }
 
+function pickCategory(v) {
+  const s = String(v || "").trim().toLowerCase();
+  const allowed = new Set(["business", "it", "finance", "games", "education", "media", "custom"]);
+  return allowed.has(s) ? s : null;
+}
+
 export async function listPlacements(req, res, next) {
   try {
     const publisherId = getPublisherId(req);
@@ -331,7 +338,7 @@ export async function listPlacements(req, res, next) {
       SELECT
         id, name, domain, ad_type, status,
         moderation_status, public_key, approved_at, rejected_reason,
-        created_at
+        created_at, category, category_custom
       FROM placements
       WHERE publisher_id = $1
       ORDER BY created_at DESC
@@ -357,6 +364,9 @@ export async function createPlacement(req, res, next) {
     const domain = String(req.body?.domain || "").trim();
     const adType = pickAdType(req.body?.ad_type);
 
+    const category = pickCategory(req.body?.category);
+    const categoryCustom = String(req.body?.category_custom || "").trim();
+
     if (!name) return res.status(400).json({ error: "name is required" });
     if (!domain) return res.status(400).json({ error: "domain is required" });
     if (!adType) {
@@ -364,6 +374,17 @@ export async function createPlacement(req, res, next) {
         error: "ad_type must be rewarded_video or interstitial",
       });
     }
+
+    if (!category) {
+      return res.status(400).json({
+        error: "category must be one of: business, it, finance, games, education, media, custom",
+      });
+    }
+    if (category === "custom" && !categoryCustom) {
+      return res.status(400).json({ error: "category_custom is required for custom category" });
+    }
+
+    const moderationStatus = category === "custom" ? "pending" : "draft";
 
     const keyRes = await pool.query(`SELECT api_key FROM api_keys WHERE status = 'active' LIMIT 1`);
     if (!keyRes.rowCount) {
@@ -376,12 +397,23 @@ export async function createPlacement(req, res, next) {
     const r = await pool.query(
       `
       INSERT INTO placements
-        (id, api_key, name, ad_type, status, publisher_id, domain, moderation_status, public_key)
+        (id, api_key, name, ad_type, status, publisher_id, domain, moderation_status, public_key, category, category_custom)
       VALUES
-        ($1, $2, $3, $4, 'active', $5, $6, 'draft', $7)
+        ($1, $2, $3, $4, 'active', $5, $6, $7, $8, $9, $10)
       RETURNING *
       `,
-      [id, keyRes.rows[0].api_key, name, adType, publisherId, domain, publicKey]
+      [
+        id,
+        keyRes.rows[0].api_key,
+        name,
+        adType,
+        publisherId,
+        domain,
+        moderationStatus,
+        publicKey,
+        category,
+        category === "custom" ? categoryCustom : null,
+      ]
     );
 
     res.json({ placement: r.rows[0] });
@@ -549,7 +581,8 @@ export async function getSdkScript(req, res, next) {
 
     const p = r.rows[0];
 
-    const sdkUrl = process.env.TOWERADS_SDK_URL || "https://portal.yourdomain.com/sdk/tower-ads-v4.js";
+    const sdkUrl =
+      process.env.TOWERADS_SDK_URL || "https://portal.yourdomain.com/sdk/tower-ads-v4.js";
 
     const script = `<!-- TowerAds Unified SDK -->
 <script>
@@ -583,4 +616,5 @@ export const publisherSummary = getSummary;
 export const publisherDaily = getDaily;
 export const publisherProvidersStats = getProvidersStats;
 export const publisherDashboard = getDashboard;
+
 
